@@ -1,0 +1,20 @@
+{% extends "emailauto/base.html" %}
+
+{% block title %}Login{% endblock %}
+{% block heading %}Operator Login{% endblock %}
+
+{% block content %}
+  <section class="panel" style="max-width: 420px;">
+    <h2>Sign in</h2>
+    {% if form.errors %}
+      <ul class="messages"><li style="background:#fdecea;border-color:#f5c6cb;">Invalid username or password.</li></ul>
+    {% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <p><label>Username<br><input type="text" name="username" autofocus required></label></p>
+      <p><label>Password<br><input type="password" name="password" required></label></p>
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit">Log in</button>
+    </form>
+  </section>
+{% endblock %}

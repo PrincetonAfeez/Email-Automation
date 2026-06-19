@@ -1,0 +1,59 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: emailauto
+      POSTGRES_USER: emailauto
+      POSTGRES_PASSWORD: emailauto
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             python manage.py emailauto_beat ensure-dispatcher &&
+             python manage.py runserver 0.0.0.0:8000"
+    environment: &app-env
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
+      DJANGO_DEBUG: "false"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DATABASE_URL: postgres://emailauto:emailauto@postgres:5432/emailauto
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_CACHE_URL: redis://redis:6379/2
+      EMAIL_BACKEND: console
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - postgres
+
+  worker:
+    build: .
+    command: celery -A emailauto.config worker -l info
+    environment: *app-env
+    depends_on:
+      - redis
+      - postgres
+      - web
+
+  beat:
+    build: .
+    command: celery -A emailauto.config beat -l info
+    environment: *app-env
+    depends_on:
+      - redis
+      - postgres
+      - web
+
+volumes:
+  postgres-data:

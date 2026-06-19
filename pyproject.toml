@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "email-automation-capstone"
+version = "0.1.0"
+description = "Scheduled email automation with Django, Celery, outbox idempotency, retries, DLQ, CLI, and HTMX admin."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+  "Django>=5.2",
+  "celery>=5.5",
+  "django-celery-beat>=2.8",
+  "django-redis>=5.4",
+  "dj-database-url>=2.3",
+  "redis>=5.2",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-django>=4.8",
+  "pytest-cov>=5.0",
+  "mypy>=1.8",
+  "django-stubs[compatible-mypy]>=5.1",
+  "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+plugins = ["mypy_django_plugin.main"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = ['migrations/', 'tests/']
+
+[tool.django-stubs]
+django_settings_module = "emailauto.config.settings"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "emailauto.config.settings"
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+  "ignore:unclosed database:ResourceWarning",
+  "ignore::ResourceWarning",
+]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["**/migrations/**"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# Long lines are tolerated (log/format strings, model field declarations); the rest of
+# the E/F/W/I/B/UP rules still apply.
+ignore = ["E501"]
+
+[tool.coverage.run]
+source = ["src/emailauto"]
+omit = ["*/migrations/*"]
+
+[tool.coverage.report]
+skip_covered = false
+show_missing = false
+

@@ -1,0 +1,27 @@
+{% extends "emailauto/base.html" %}
+
+{% block title %}Run {{ run.id }}{% endblock %}
+{% block heading %}Run {{ run.id }} — {{ run.campaign.name }}{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <table>
+      <tr><th>Campaign</th><td><a href="{% url 'emailauto:campaign_detail' run.campaign.id %}">{{ run.campaign.name }}</a></td></tr>
+      <tr><th>Run key</th><td>{{ run.run_key }}</td></tr>
+      <tr><th>Status</th><td>{{ run.status }}</td></tr>
+      <tr><th>Scheduled for</th><td>{{ run.scheduled_for }}</td></tr>
+      <tr><th>Generated at</th><td>{{ run.generated_at|default:"—" }}</td></tr>
+    </table>
+  </section>
+  <section class="panel">
+    <h2>Per-run stats</h2>
+    <div class="stats">
+      {% for key, value in stats.items %}
+        <div class="stat"><strong>{{ value }}</strong><span>{{ key }}</span></div>
+      {% endfor %}
+    </div>
+  </section>
+  <section class="panel">
+    {% include "emailauto/partials/outbox_table.html" %}
+  </section>
+{% endblock %}

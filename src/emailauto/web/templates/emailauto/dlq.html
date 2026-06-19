@@ -1,0 +1,40 @@
+{% extends "emailauto/base.html" %}
+
+{% block title %}Dead Letters{% endblock %}
+{% block heading %}Dead Letters{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <table>
+      <thead><tr><th>ID</th><th>Campaign</th><th>Recipient</th><th>Error</th><th></th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td><a href="{% url 'emailauto:outbox_detail' row.id %}">{{ row.id }}</a></td>
+            <td>{{ row.campaign.name }}</td>
+            <td>{{ row.recipient.email }}</td>
+            <td>{{ row.last_error }}</td>
+            <td>
+              {% if can_operate %}
+              <form method="post" action="{% url 'emailauto:requeue_dlq' row.id %}">
+                {% csrf_token %}
+                <button type="submit">Requeue</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5">No dead-lettered rows.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if page.has_other_pages %}
+      <p>
+        {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">Previous</a>{% endif %}
+        Page {{ page.number }} of {{ page.paginator.num_pages }}
+        {% if page.has_next %}<a href="?page={{ page.next_page_number }}">Next</a>{% endif %}
+      </p>
+    {% endif %}
+  </section>
+{% endblock %}
+

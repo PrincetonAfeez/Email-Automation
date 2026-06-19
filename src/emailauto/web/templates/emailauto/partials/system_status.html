@@ -1,0 +1,7 @@
+<h2>System</h2>
+<div class="stats">
+  <div class="stat"><strong>{{ throughput }}</strong><span>sent / last 60s</span></div>
+  <div class="stat"><strong>{{ throttle.global_used }}/{{ throttle.global_limit }}</strong><span>global rate window</span></div>
+  <div class="stat"><strong>{{ throttle.global_remaining }}</strong><span>rate remaining</span></div>
+  <div class="stat"><strong>{% if throttle.throttled %}THROTTLED{% else %}OK{% endif %}</strong><span>rate-limit status</span></div>
+</div>

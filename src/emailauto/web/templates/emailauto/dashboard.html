@@ -1,0 +1,83 @@
+{% extends "emailauto/base.html" %}
+
+{% block content %}
+  <section class="panel" hx-get="{% url 'emailauto:stats_partial' %}" hx-trigger="every 5s" hx-swap="innerHTML">
+    {% include "emailauto/partials/campaign_stats.html" %}
+  </section>
+  <section class="panel" hx-get="{% url 'emailauto:system_partial' %}" hx-trigger="every 5s" hx-swap="innerHTML">
+    {% include "emailauto/partials/system_status.html" %}
+  </section>
+  <section class="split">
+    <div class="panel" hx-get="{% url 'emailauto:outbox_table_partial' %}" hx-trigger="every 8s" hx-swap="innerHTML">
+      {% include "emailauto/partials/outbox_table.html" with outbox_rows=recent_outbox %}
+    </div>
+    <div class="panel">
+      <h2>Campaigns</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          {% for row in campaign_rows %}
+            <tr>
+              <td><a href="{% url 'emailauto:campaign_detail' row.campaign.id %}">{{ row.campaign.name }}</a></td>
+              <td>{{ row.campaign.status }}</td>
+              <td>
+                {% if can_operate %}
+                  {% if row.actions.can_trigger %}
+                    <form method="post" action="{% url 'emailauto:campaign_action' row.campaign.id 'trigger' %}" style="display:inline">
+                      {% csrf_token %}<button type="submit">Send now</button>
+                    </form>
+                  {% endif %}
+                  {% if row.actions.can_pause %}
+                    <form method="post" action="{% url 'emailauto:campaign_action' row.campaign.id 'pause' %}" style="display:inline">
+                      {% csrf_token %}<button type="submit">Pause</button>
+                    </form>
+                  {% endif %}
+                  {% if row.actions.can_resume %}
+                    <form method="post" action="{% url 'emailauto:campaign_action' row.campaign.id 'resume' %}" style="display:inline">
+                      {% csrf_token %}<button type="submit">Resume</button>
+                    </form>
+                  {% endif %}
+                  {% if row.actions.can_cancel %}
+                    <form method="post" action="{% url 'emailauto:campaign_action' row.campaign.id 'cancel' %}" style="display:inline">
+                      {% csrf_token %}<button type="submit">Cancel</button>
+                    </form>
+                  {% endif %}
+                {% else %}
+                  <span>View only</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3">No campaigns yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <h2>Recent Failures</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Recipient</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for row in recent_failures %}
+            <tr>
+              <td><a href="{% url 'emailauto:outbox_detail' row.id %}">{{ row.id }}</a></td>
+              <td>{{ row.recipient.email }}</td>
+              <td>{{ row.status }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3">No recent failures.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <h2>Suppress an address</h2>
+      {% if can_operate %}
+      <form method="post" action="{% url 'emailauto:add_suppression' %}">
+        {% csrf_token %}
+        <input type="email" name="email" placeholder="user@example.com" required>
+        <input type="text" name="reason" placeholder="reason">
+        <button type="submit">Suppress</button>
+      </form>
+      {% else %}
+      <p>Operator permission required to add suppressions.</p>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

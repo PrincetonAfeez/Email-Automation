@@ -1,0 +1,50 @@
+{% extends "emailauto/base.html" %}
+
+{% block title %}{{ campaign.name }}{% endblock %}
+{% block heading %}{{ campaign.name }}{% endblock %}
+
+{% block content %}
+  <section class="panel" hx-get="{% url 'emailauto:stats_partial' %}?campaign_id={{ campaign.id }}" hx-trigger="every 5s" hx-swap="innerHTML">
+    {% include "emailauto/partials/campaign_stats.html" %}
+  </section>
+  <section class="panel">
+    <h2>Campaign actions</h2>
+    {% if can_operate %}
+      {% if actions.can_trigger %}
+        <form method="post" action="{% url 'emailauto:campaign_action' campaign.id 'trigger' %}" style="display:inline">{% csrf_token %}<button type="submit">Send now</button></form>
+      {% endif %}
+      {% if actions.can_pause %}
+        <form method="post" action="{% url 'emailauto:campaign_action' campaign.id 'pause' %}" style="display:inline">{% csrf_token %}<button type="submit">Pause</button></form>
+      {% endif %}
+      {% if actions.can_resume %}
+        <form method="post" action="{% url 'emailauto:campaign_action' campaign.id 'resume' %}" style="display:inline">{% csrf_token %}<button type="submit">Resume</button></form>
+      {% endif %}
+      {% if actions.can_cancel %}
+        <form method="post" action="{% url 'emailauto:campaign_action' campaign.id 'cancel' %}" style="display:inline">{% csrf_token %}<button type="submit">Cancel</button></form>
+      {% endif %}
+    {% else %}
+      <p>Operator permission required for campaign actions.</p>
+    {% endif %}
+  </section>
+  <section class="panel">
+    <h2>Runs</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Scheduled for</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for run in runs %}
+          <tr>
+            <td><a href="{% url 'emailauto:campaign_run_detail' run.id %}">{{ run.id }}</a></td>
+            <td>{{ run.scheduled_for }}</td>
+            <td>{{ run.status }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="3">No runs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="panel">
+    {% include "emailauto/partials/outbox_table.html" %}
+  </section>
+{% endblock %}
+

@@ -1,0 +1,68 @@
+{% extends "emailauto/base.html" %}
+
+{% block title %}Outbox {{ row.id }}{% endblock %}
+{% block heading %}Outbox {{ row.id }}{% endblock %}
+
+{% block content %}
+  <section class="split">
+    <div class="panel">
+      <h2>Message</h2>
+      <table>
+        <tr><th>Campaign</th><td>{{ row.campaign.name }}</td></tr>
+        <tr><th>Recipient</th><td>{{ row.recipient.email }}</td></tr>
+        <tr><th>Status</th><td>{{ row.status }}</td></tr>
+        <tr><th>Attempts</th><td>{{ row.attempt_count }}/{{ row.max_attempts }}</td></tr>
+        <tr><th>Idempotency</th><td>{{ row.idempotency_key }}</td></tr>
+        <tr><th>Last error</th><td>{{ row.last_error|default:"" }}</td></tr>
+      </table>
+      {% if can_retry or can_cancel or can_force_requeue %}
+        <p>
+          {% if can_retry %}
+            <form method="post" action="{% url 'emailauto:outbox_action' row.id 'retry' %}" style="display:inline">
+              {% csrf_token %}<button type="submit">Retry</button>
+            </form>
+          {% endif %}
+          {% if can_cancel %}
+            <form method="post" action="{% url 'emailauto:outbox_action' row.id 'cancel' %}" style="display:inline">
+              {% csrf_token %}<button type="submit">Cancel</button>
+            </form>
+          {% endif %}
+          {% if can_force_requeue %}
+            <form method="post" action="{% url 'emailauto:outbox_action' row.id 'force_requeue' %}" style="display:inline">
+              {% csrf_token %}<button type="submit">Force requeue</button>
+            </form>
+          {% endif %}
+        </p>
+      {% endif %}
+      <h2>Subject Snapshot</h2>
+      <pre>{{ row.subject_snapshot }}</pre>
+      <h2>Body Snapshot</h2>
+      <pre>{{ row.body_snapshot }}</pre>
+    </div>
+    <div class="panel">
+      <h2>Attempts</h2>
+      <table>
+        <thead><tr><th>#</th><th>Provider</th><th>Result</th><th>Error</th></tr></thead>
+        <tbody>
+          {% for attempt in row.attempts.all %}
+            <tr><td>{{ attempt.attempt_number }}</td><td>{{ attempt.provider_name }}</td><td>{{ attempt.result }}</td><td>{{ attempt.error_message }}</td></tr>
+          {% empty %}
+            <tr><td colspan="4">No attempts.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <h2>Events</h2>
+      <table>
+        <thead><tr><th>Event</th><th>Created</th></tr></thead>
+        <tbody>
+          {% for event in row.event_logs.all %}
+            <tr><td>{{ event.event_type }}</td><td>{{ event.created_at }}</td></tr>
+          {% empty %}
+            <tr><td colspan="2">No events.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}
+

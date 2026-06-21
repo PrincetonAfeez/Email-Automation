@@ -16,12 +16,16 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_EXTRAS: ".[prod]"
     command: >
       sh -c "python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              python manage.py emailauto_beat ensure-dispatcher &&
-             python manage.py runserver 0.0.0.0:8000"
+             gunicorn emailauto.config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
     environment: &app-env
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
       DJANGO_DEBUG: "false"
@@ -33,12 +37,19 @@ services:
       EMAIL_BACKEND: console
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       - redis
       - postgres
 
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: celery -A emailauto.config worker -l info
     environment: *app-env
     depends_on:
@@ -47,7 +58,9 @@ services:
       - web
 
   beat:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: celery -A emailauto.config beat -l info
     environment: *app-env
     depends_on:

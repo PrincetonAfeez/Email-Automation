@@ -17,3 +17,9 @@ Permanent failures move to `failed` and are not retried automatically.
 
 Dead-lettered rows are requeued only by explicit operator action.
 
+**Celery revoke note:** when a campaign or outbox row is cancelled, the app calls
+`celery.control.revoke(task_id, terminate=False)`. That prevents a queued task from starting
+but does **not** interrupt a worker that is already executing `send_outbox_email`. Correctness
+relies on claim tokens, state transitions, and the send-path re-check for cancelled campaigns
+before contacting the provider.
+

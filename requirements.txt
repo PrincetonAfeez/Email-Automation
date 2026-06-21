@@ -1,6 +1,7 @@
 # Pinned runtime dependencies (a known-good resolved set).
 # pyproject.toml declares compatible ranges; this file locks them for reproducible installs.
-# Regenerate after upgrading: pip install -e . && pip freeze | findstr /R "Django celery redis dotenv"
+# Install: pip install -r requirements.txt -e .
+# Regenerate after upgrading: pip install -e ".[dev,prod]" && pip freeze | findstr /R "Django celery redis dotenv gunicorn dj-database"
 Django==5.2.14
 celery==5.6.3
 django-celery-beat==2.9.0

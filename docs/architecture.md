@@ -42,6 +42,12 @@ Redis can be used as the Celery broker, Django cache backend, and throttle count
 
 SQLite works for local demos and tests. PostgreSQL is preferred for concurrent workers because row locks and `select_for_update` semantics are stronger.
 
+**Shared modules:** `emailauto.core` holds cross-cutting state machines and exceptions but is intentionally **not** registered in `INSTALLED_APPS` — it is a library package imported by the Django apps. `CampaignRun` transitions are enforced in `emailauto/scheduling/run_transitions.py` and the dispatcher. Scheduled campaigns are auto-promoted to `active` when dispatch begins.
+
+**Operator audit:** dashboard/CLI mutations record durable `operator_action` events (username, action, metadata) via `emailauto.observability.audit`.
+
+**Out of scope:** inbound bounce/webhook processing and automatic list hygiene — suppressions are operator/import driven. See [docs/out_of_scope.md](out_of_scope.md).
+
 The concurrency model — atomic single-statement claims, `SELECT … FOR UPDATE SKIP LOCKED`
 dispatch, and the unique constraints that are the real duplicate-guard — and its
 deadlock/starvation posture are documented in

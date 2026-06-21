@@ -1,4 +1,4 @@
-# Celery And Beat
+# Celery And Beat 
 
 Celery tasks are execution messages. They do not contain full email payloads.
 

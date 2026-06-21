@@ -42,20 +42,22 @@ See [docs/architecture.md](docs/architecture.md) for the full diagram and compon
   DLQ, stats, sample-data seeding, and both safe and unsafe demos.
 - Operator web views: dashboard (live stats, throughput, rate-limit status), schedule
   visibility, per-campaign and per-run pages, and the DLQ.
-- Pytest coverage for the core reliability paths (idempotency, claims, retries, DLQ,
-  suppression-at-send, batching, cron, throttling, and operator actions).
+- Pytest suite (353 tests, ~99% coverage) for reliability paths (idempotency, claims,
+  retries, DLQ, suppression-at-send, batching, cron, throttling, operator actions),
+  full CLI/admin/web coverage, and teaching demos.
 
 ## Setup
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -r requirements-dev.txt -e ".[dev]"
 python manage.py migrate
 python manage.py createsuperuser
 ```
 
-`pyproject.toml` declares compatible version ranges; `requirements.txt` /
-`requirements-dev.txt` pin a known-good resolved set for reproducible installs
-(`pip install -r requirements-dev.txt`).
+`pyproject.toml` (v0.2.0) declares compatible version ranges; `requirements.txt`,
+`requirements-dev.txt`, and `requirements-prod.txt` pin a known-good resolved set for
+reproducible installs (`pip install -r requirements-dev.txt -e ".[dev]"` for local work,
+`pip install -r requirements-prod.txt -e ".[prod]"` for production/Docker).
 
 For Redis:
 
@@ -71,12 +73,15 @@ python manage.py emailauto_seed --reset --noinput
 python manage.py runserver
 ```
 
-The dashboard and operator actions require a logged-in user with the
-`campaigns.operate_campaign` permission (grant via Django admin or assign to staff).
-Anonymous requests are redirected to the operator login at
-`/accounts/login/`; create an account with `createsuperuser` (above) or via the admin.
-HTMX is vendored under `web/static/` (no CDN dependency), so run `collectstatic` for
-production.
+The seed command creates an `operator` user with `campaigns.operate_campaign`. By default
+the password is random (printed once) or set via `EMAILAUTO_SEED_OPERATOR_PASSWORD` /
+`--operator-password`. Pass `--no-create-operator` to skip demo credentials entirely.
+The dashboard and operator actions require a logged-in user with that permission (grant via
+Django admin or assign to staff). Anonymous requests are redirected to the operator login
+at `/accounts/login/`; create an account with `createsuperuser` (above) or use the seeded
+operator account.
+HTMX is vendored under `src/emailauto/web/static/emailauto/vendor/` (no CDN dependency);
+run `collectstatic` for production.
 
 `DEBUG` defaults to `true` for a zero-config local run. In production set
 `DJANGO_DEBUG=false` and a real `DJANGO_SECRET_KEY` (the app refuses to start without one
@@ -170,19 +175,24 @@ ruff check src tests          # lint + import order
 mypy src                      # type check (django-stubs)
 python manage.py check
 python manage.py makemigrations --check --dry-run
-pytest --cov=emailauto --cov-report=term-missing   # ~85% coverage
+pytest --cov=emailauto --cov-report=term-missing --cov-fail-under=99   # 353 tests, ~99% coverage
 ```
+
+For a structured reviewer walkthrough, see [docs/portfolio_walkthrough.md](docs/portfolio_walkthrough.md).
 
 ## Production notes
 
-- Set `DJANGO_DEBUG=false` and a strong `DJANGO_SECRET_KEY`.
+- Set `DJANGO_DEBUG=false`, a strong `DJANGO_SECRET_KEY`, and **`REDIS_CACHE_URL`** (required when debug is off).
 - Use PostgreSQL and Redis in production; SQLite is for local demos only.
 - For Docker, use `docker compose -f docker-compose.yml -f docker-compose.prod.yml up`
-  (prod override sets `DEBUG=false`, runs `collectstatic`, and expects a real secret).
+  (prod override sets `DEBUG=false`, runs `collectstatic`, serves via Gunicorn, and expects a real secret).
 - SMTP: set `SMTP_USE_TLS=true` for port 587 (STARTTLS) or `SMTP_USE_SSL=true` for port 465.
 - Schedule `timezone_name` is **display-only**; dispatch always evaluates UTC.
 - Grant `campaigns.operate_campaign` to non-staff operator accounts via Django admin (superusers have it automatically).
 - Throttling and dashboard stats are accurate across multiple workers only when `REDIS_CACHE_URL` is set.
+- Send-rate slots are consumed only after a **successful** delivery; throttled or failed sends do not consume quota.
+- Supported Python versions: 3.11–3.14 (see CI matrix).
+- Health/readiness probe: `GET /health/` returns `{"status":"ok","database":true}` when healthy, or HTTP **503** with `{"status":"degraded","database":false}` when the database is unreachable. Append `?deep=1` to also check shared cache and the Celery broker (`cache`, `broker` boolean fields).
 
 ## Data Ownership
 
@@ -190,7 +200,17 @@ pytest --cov=emailauto --cov-report=term-missing   # ~85% coverage
 - Broker data: Celery delivery messages that point to durable outbox IDs.
 - Cache data: dashboard counts and rate-limit counters. Cache is never used for send correctness.
 
+## Future work
+
+Production and extension items deliberately out of scope for the capstone demo but documented for reviewers:
+
+- **Production hardening:** authenticated deep health probes, Docker service healthchecks, HSTS defaults, CI job with Redis/Celery integration (see [docs/out_of_scope.md](docs/out_of_scope.md) and production notes above).
+- **Inbound webhooks:** bounce/complaint handling to auto-populate suppressions.
+- **Schedule hygiene:** optional cleanup of orphan one-time schedules created by repeated manual triggers.
+- **Provider deduplication:** SMTP sends an `X-Idempotency-Key` header; a provider-side dedupe layer would complement app-level correctness.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history and reliability fixes applied during development.
+
 ## License
 
-Released under the [MIT License](LICENSE). (Replace the copyright holder line with your
-name before publishing.)
+Released under the [MIT License](LICENSE).

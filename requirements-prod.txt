@@ -1,0 +1,5 @@
+# Pinned production dependencies (a known-good resolved set).
+# Install: pip install -r requirements-prod.txt -e ".[prod]"
+# Regenerate after upgrading: pip install -e ".[dev,prod]" && pip freeze | findstr /R "gunicorn"
+-r requirements.txt
+gunicorn==26.0.0

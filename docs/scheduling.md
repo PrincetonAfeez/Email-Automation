@@ -20,6 +20,8 @@ Cron field notes:
 - `timezone_name` on a schedule is **display-only** for the operator UI; it does not shift
   when dispatch fires.
 - Weekday ranges do not wrap across week boundaries (e.g. `FRI-MON` does not include Sat/Sun).
+- When **both** day-of-month and day-of-week are restricted (neither is `*`/`?`), a date matches if **either** field matches (standard cron OR semantics). Month always constrains the match.
+- **Not supported:** Quartz-style tokens such as `L` (last day), `W` (nearest weekday), and `#` (nth weekday). Use explicit day lists or intervals instead.
 
 The dispatcher is safe to run repeatedly. Duplicate campaign occurrences are blocked by the unique `run_key`, and duplicate recipient work is blocked by the unique outbox `idempotency_key`.
 

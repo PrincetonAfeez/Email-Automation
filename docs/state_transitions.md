@@ -30,7 +30,7 @@ Failure paths:
 ```text
 sending -> dead_lettered           # transient failure with attempts exhausted
 sending -> failed                  # permanent failure (bad address, render error, ...)
-retry_scheduled -> dead_lettered   # a scheduled retry abandoned once exhausted
+retry_scheduled -> dead_lettered   # only via post-attempt reconcile after mid-flight release; normal exhaustion is from sending
 ```
 
 Suppression path:
@@ -40,24 +40,35 @@ pending -> skipped_suppressed
 claimed -> skipped_suppressed
 ```
 
-Cancellation path:
+Cancellation path (operator, via `cancel_outbox` / campaign cancel):
 
 ```text
 pending -> cancelled
 enqueued -> cancelled
 retry_scheduled -> cancelled
 requeued -> cancelled
-claimed -> cancelled
 ```
+
+Worker-only cancellation (in-flight rows when a campaign is cancelled):
+
+```text
+claimed -> cancelled              # worker sees cancelled campaign before sending
+sending -> cancelled              # worker re-checks before provider call; bulk cancel uses force
+```
+
+Operator `cancel_outbox()` does **not** accept `claimed` or `sending` rows — use force-requeue
+or cancel the campaign to terminalize in-flight work.
 
 Requeue paths (operator-initiated):
 
 ```text
-dead_lettered -> requeued -> pending/enqueued/claimed
-failed -> requeued -> pending/enqueued/claimed
+dead_lettered -> requeued -> enqueued/claimed
+failed -> requeued -> enqueued/claimed
 ```
 
-Invalid examples are rejected in code and tested:
+## Invalid transitions
+
+These are rejected in code and tested:
 
 - `sent -> sending`
 - `sent -> retry_scheduled`
@@ -66,6 +77,12 @@ Invalid examples are rejected in code and tested:
 - stale claim token -> `sent`
 - stale claim token -> `retry_scheduled`
 - stale claim token -> `dead_lettered`
+
+Campaign completion is recorded as a `campaign_completed` audit event when reconciliation
+or `set_campaign_status(..., completed)` marks a campaign done.
+
+Requeue resets `attempt_count` to zero but retains historical `EmailSendAttempt` rows;
+attempt numbers continue from the prior maximum.
 
 ## Stale worker recovery
 

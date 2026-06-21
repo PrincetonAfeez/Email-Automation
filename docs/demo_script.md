@@ -40,8 +40,11 @@ python manage.py runserver
 ```
 
 Then visit (login required): `/` (dashboard + live stats, throughput, rate-limit status),
-`/schedules/` (upcoming & recurring sends), a campaign page (its runs), a run page
-(per-run stats), and `/dlq/` (requeue dead letters).
+`/schedules/` (upcoming & recurring sends, campaign status column), a campaign page
+(runs paginated, empty-list warning), a run page (per-run stats, paginated outbox), and
+`/dlq/` (requeue dead letters).
+
+For a structured reviewer presentation, see [docs/portfolio_walkthrough.md](portfolio_walkthrough.md).
 
 ## Manual walk-through (matches the scope's 8 demos)
 

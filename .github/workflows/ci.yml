@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
 
 jobs:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +20,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -r requirements-dev.txt -e ".[dev]"
 
       - name: Lint (ruff)
         run: ruff check src tests
@@ -34,5 +34,44 @@ jobs:
       - name: Migrations are up to date
         run: python manage.py makemigrations --check --dry-run
 
-      - name: Tests + coverage
-        run: pytest --cov=emailauto --cov-report=term-missing
+      - name: Tests + coverage (353 tests, ≥99% on src/emailauto)
+        run: pytest --cov=emailauto --cov-report=term-missing --cov-fail-under=99
+
+  postgres-concurrency:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: emailauto
+          POSTGRES_USER: emailauto
+          POSTGRES_PASSWORD: emailauto
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U emailauto"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://emailauto:emailauto@localhost:5432/emailauto
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -r requirements-dev.txt -e ".[dev]"
+
+      - name: Migrate (PostgreSQL)
+        run: python manage.py migrate --noinput
+
+      - name: PostgreSQL concurrency integration
+        run: >
+          pytest tests/concurrency
+          tests/integration/test_dispatcher.py
+          tests/integration/test_large_campaign_batches.py
+          -q

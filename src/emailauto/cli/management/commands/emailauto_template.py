@@ -1,3 +1,5 @@
+""" Create and list email templates. Maps to the scope's `emailauto template`."""
+
 from __future__ import annotations
 
 import json

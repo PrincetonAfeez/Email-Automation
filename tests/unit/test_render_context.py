@@ -1,3 +1,5 @@
+""" Test render context for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest

@@ -1,3 +1,5 @@
+""" Celery configuration for EmailAuto."""
+
 from __future__ import annotations
 
 import os

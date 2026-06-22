@@ -1,22 +1,15 @@
-from __future__ import annotations
-
-from django.contrib import messages
-from django.contrib.auth.decorators import login_required
-from django.core.paginator import Paginator
-from django.http import HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
-from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.decorators.http import require_POST
+""" Views for EmailAuto."""
 
 from emailauto.cache.stats_cache import get_dashboard_stats
 from emailauto.campaigns.models import Campaign
 from emailauto.campaigns.services import cancel_campaign, pause_campaign, resume_campaign, trigger_campaign_now
 from emailauto.core.states import CampaignStatus, OutboxStatus
+from emailauto.observability.audit import record_operator_action
 from emailauto.observability.stats import recent_failures, recent_send_throughput, run_counts
 from emailauto.outbox.models import EmailOutbox
-from emailauto.outbox.services import cancel_outbox, force_requeue_outbox, requeue_outbox, retry_outbox
-from emailauto.recipients.suppression import suppress_email
+from emailauto.outbox.services import cancel_outbox, force_requeue_outbox, retry_outbox
+from emailauto.recipients.subscription import set_recipient_subscribed
+from emailauto.recipients.suppression import suppress_email, unsuppress_email
 from emailauto.scheduling.models import CampaignRun, CampaignSchedule
 from emailauto.web.decorators import operator_rate_limit, operator_required
 from emailauto.workers.throttling import throttle_status
@@ -32,7 +25,7 @@ def _campaign_actions(campaign: Campaign) -> dict[str, bool]:
 
 
 def _recent_outbox(limit: int = 100):
-    return EmailOutbox.objects.select_related("campaign", "recipient").order_by("-updated_at")[:limit]
+    return _recent_outbox_queryset()[:limit]
 
 
 def _safe_redirect(request: HttpRequest, fallback: str) -> HttpResponse:
@@ -42,17 +35,60 @@ def _safe_redirect(request: HttpRequest, fallback: str) -> HttpResponse:
     return redirect(reverse(fallback))
 
 
+def _recent_outbox_queryset():
+    return EmailOutbox.objects.select_related("campaign", "recipient").order_by("-updated_at")
+
+
+def health(request: HttpRequest) -> HttpResponse:
+    """Lightweight readiness probe for Docker and load balancers."""
+    db_ok = True
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except Exception:
+        db_ok = False
+    payload: dict[str, object] = {"status": "ok" if db_ok else "degraded", "database": db_ok}
+    status_code = 200 if db_ok else 503
+
+    if request.GET.get("deep"):
+        cache_ok = True
+        broker_ok = True
+        try:
+            cache.set("emailauto:health:ping", 1, timeout=5)
+            cache_ok = cache.get("emailauto:health:ping") == 1
+        except Exception:
+            cache_ok = False
+        try:
+            import redis
+            from django.conf import settings
+
+            client = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
+            broker_ok = bool(client.ping())
+        except Exception:
+            broker_ok = False
+        payload["cache"] = cache_ok
+        payload["broker"] = broker_ok
+        if not (cache_ok and broker_ok):
+            payload["status"] = "degraded"
+            status_code = 503
+
+    return JsonResponse(payload, status=status_code)
+
+
 @login_required
 def dashboard(request: HttpRequest) -> HttpResponse:
-    campaigns = Campaign.objects.order_by("name")[:25]
+    campaign_page = Paginator(Campaign.objects.order_by("name"), 25).get_page(request.GET.get("campaign_page"))
+    outbox_page = Paginator(_recent_outbox_queryset(), 50).get_page(request.GET.get("outbox_page"))
     return render(
         request,
         "emailauto/dashboard.html",
         {
             "stats": get_dashboard_stats(),
-            "campaign_rows": [{"campaign": c, "actions": _campaign_actions(c)} for c in campaigns],
+            "campaign_rows": [{"campaign": c, "actions": _campaign_actions(c)} for c in campaign_page.object_list],
+            "campaign_page": campaign_page,
             "recent_failures": recent_failures(),
-            "recent_outbox": _recent_outbox(),
+            "outbox_page": outbox_page,
+            "recent_outbox": outbox_page.object_list,
             "throughput": recent_send_throughput(),
             "throttle": throttle_status(),
             "can_operate": request.user.is_staff or request.user.has_perm("campaigns.operate_campaign"),
@@ -62,35 +98,49 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def schedules(request: HttpRequest) -> HttpResponse:
-    upcoming = (
+    queryset = (
         CampaignSchedule.objects.select_related("campaign")
         .filter(enabled=True)
-        .order_by("next_run_at", "id")[:100]
+        .order_by("next_run_at", "id")
     )
+    page = Paginator(queryset, 50).get_page(request.GET.get("page"))
     return render(
         request,
         "emailauto/schedules.html",
-        {"schedules": upcoming, "scheduling_note": "All dispatch times are evaluated in UTC. The timezone column is display-only."},
+        {
+            "page": page,
+            "schedules": page.object_list,
+            "scheduling_note": "All dispatch times are evaluated in UTC. The timezone column is display-only.",
+        },
     )
 
 
 @login_required
 def campaign_run_detail(request: HttpRequest, run_id: int) -> HttpResponse:
     run = get_object_or_404(CampaignRun.objects.select_related("campaign", "schedule"), pk=run_id)
+    outbox_page = Paginator(run.outbox_rows.select_related("recipient").order_by("-updated_at"), 50).get_page(
+        request.GET.get("outbox_page")
+    )
     return render(
         request,
         "emailauto/campaign_run_detail.html",
         {
             "run": run,
             "stats": run_counts(campaign_run_id=run.id),
-            "outbox_rows": run.outbox_rows.select_related("recipient").order_by("-updated_at")[:100],
+            "outbox_page": outbox_page,
+            "outbox_rows": outbox_page.object_list,
         },
     )
 
 
 @login_required
 def campaign_detail(request: HttpRequest, campaign_id: int) -> HttpResponse:
-    campaign = get_object_or_404(Campaign, pk=campaign_id)
+    campaign = get_object_or_404(Campaign.objects.select_related("recipient_list"), pk=campaign_id)
+    outbox_page = Paginator(campaign.outbox_rows.select_related("recipient").order_by("-updated_at"), 50).get_page(
+        request.GET.get("outbox_page")
+    )
+    runs_page = Paginator(campaign.runs.order_by("-scheduled_for"), 25).get_page(request.GET.get("runs_page"))
+    recipient_count = campaign.recipient_list.recipients.count()
     return render(
         request,
         "emailauto/campaign_detail.html",
@@ -98,8 +148,12 @@ def campaign_detail(request: HttpRequest, campaign_id: int) -> HttpResponse:
             "campaign": campaign,
             "actions": _campaign_actions(campaign),
             "stats": get_dashboard_stats(campaign_id=campaign.id),
-            "outbox_rows": campaign.outbox_rows.select_related("recipient").order_by("-updated_at")[:100],
-            "runs": campaign.runs.order_by("-scheduled_for")[:25],
+            "outbox_page": outbox_page,
+            "outbox_rows": outbox_page.object_list,
+            "runs_page": runs_page,
+            "runs": runs_page.object_list,
+            "recipient_count": recipient_count,
+            "empty_recipient_list": recipient_count == 0,
             "can_operate": request.user.is_staff or request.user.has_perm("campaigns.operate_campaign"),
         },
     )
@@ -157,11 +211,12 @@ def dlq(request: HttpRequest) -> HttpResponse:
 @require_POST
 def requeue_dlq(request: HttpRequest, outbox_id: int) -> HttpResponse:
     try:
-        requeue_outbox(outbox_id)
+        row = retry_outbox(outbox_id)
     except (EmailOutbox.DoesNotExist, ValueError) as exc:
         messages.error(request, str(exc))
     else:
-        messages.success(request, f"Requeued outbox row {outbox_id}.")
+        record_operator_action(user=request.user, action="dlq_requeue", outbox=row)
+        messages.success(request, f"Requeued outbox row {outbox_id} ({row.status}).")
     return _safe_redirect(request, "emailauto:dlq")
 
 
@@ -177,9 +232,16 @@ def campaign_action(request: HttpRequest, campaign_id: int, action: str) -> Http
     try:
         if action == "trigger":
             result = trigger_campaign_now(campaign_id)
+            record_operator_action(
+                user=request.user,
+                action="campaign_trigger",
+                campaign=Campaign.objects.get(pk=campaign_id),
+                metadata={"outbox_created": result.outbox_created, "outbox_enqueued": result.outbox_enqueued},
+            )
             messages.success(request, f"Triggered campaign {campaign_id}: {result.outbox_created} queued, {result.outbox_enqueued} enqueued.")
         elif action in handlers:
             campaign = handlers[action](campaign_id)
+            record_operator_action(user=request.user, action=f"campaign_{action}", campaign=campaign)
             messages.success(request, f"Campaign {campaign.name} -> {campaign.status}.")
         else:
             messages.error(request, f"Unknown campaign action: {action}.")
@@ -195,12 +257,15 @@ def outbox_action(request: HttpRequest, outbox_id: int, action: str) -> HttpResp
     try:
         if action == "retry":
             row = retry_outbox(outbox_id)
+            record_operator_action(user=request.user, action="outbox_retry", outbox=row)
             messages.success(request, f"Retry queued for outbox {outbox_id} ({row.status}).")
         elif action == "cancel":
             row = cancel_outbox(outbox_id)
+            record_operator_action(user=request.user, action="outbox_cancel", outbox=row)
             messages.success(request, f"Cancelled outbox {outbox_id} ({row.status}).")
         elif action == "force_requeue":
             row = force_requeue_outbox(outbox_id)
+            record_operator_action(user=request.user, action="outbox_force_requeue", outbox=row)
             messages.success(request, f"Force-requeued outbox {outbox_id} ({row.status}).")
         else:
             messages.error(request, f"Unknown outbox action: {action}.")
@@ -219,7 +284,51 @@ def add_suppression(request: HttpRequest) -> HttpResponse:
         messages.error(request, "An email address is required to suppress.")
     else:
         entry = suppress_email(email, reason=reason)
+        record_operator_action(user=request.user, action="suppress", metadata={"email": entry.email, "reason": reason})
         messages.success(request, f"Suppressed {entry.email}.")
+    return _safe_redirect(request, "emailauto:dashboard")
+
+
+@operator_required
+@operator_rate_limit
+@require_POST
+def remove_suppression(request: HttpRequest) -> HttpResponse:
+    email = (request.POST.get("email") or "").strip()
+    if not email:
+        messages.error(request, "An email address is required to remove suppression.")
+    else:
+        deleted = unsuppress_email(email)
+        if deleted:
+            record_operator_action(user=request.user, action="unsuppress", metadata={"email": email.strip().lower()})
+            messages.success(request, f"Removed suppression for {email.strip().lower()}.")
+        else:
+            messages.warning(request, f"No suppression entry found for {email.strip().lower()}.")
+    return _safe_redirect(request, "emailauto:dashboard")
+
+
+@operator_required
+@operator_rate_limit
+@require_POST
+def set_subscription(request: HttpRequest) -> HttpResponse:
+    email = (request.POST.get("email") or "").strip()
+    action = (request.POST.get("action") or "").strip().lower()
+    if not email:
+        messages.error(request, "An email address is required.")
+    elif action not in {"subscribe", "unsubscribe"}:
+        messages.error(request, "Unknown subscription action.")
+    else:
+        try:
+            recipient = set_recipient_subscribed(email, subscribed=(action == "subscribe"))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            record_operator_action(
+                user=request.user,
+                action=f"recipient_{action}",
+                metadata={"email": recipient.email},
+            )
+            state = "subscribed" if recipient.subscribed else "unsubscribed"
+            messages.success(request, f"{recipient.email} is now {state}.")
     return _safe_redirect(request, "emailauto:dashboard")
 
 
@@ -236,7 +345,12 @@ def stats_partial(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def outbox_table_partial(request: HttpRequest) -> HttpResponse:
-    return render(request, "emailauto/partials/outbox_table.html", {"outbox_rows": _recent_outbox()})
+    outbox_page = Paginator(_recent_outbox_queryset(), 50).get_page(request.GET.get("outbox_page"))
+    return render(
+        request,
+        "emailauto/partials/outbox_table_panel.html",
+        {"outbox_rows": outbox_page.object_list, "outbox_page": outbox_page},
+    )
 
 
 @login_required

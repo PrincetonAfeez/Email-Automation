@@ -1,3 +1,5 @@
+""" Beat for EmailAuto."""
+
 from __future__ import annotations
 
 from django_celery_beat.models import IntervalSchedule, PeriodicTask

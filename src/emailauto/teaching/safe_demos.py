@@ -1,4 +1,4 @@
-"""Safe, self-contained demonstrations of the real (correct) pipeline.
+"""Safe, self-contained demonstrations of the real (correct) pipeline
 
 Each demo builds a tiny campaign, exercises the production code paths through the fake
 backend, captures observable results, and rolls back so the database is left untouched

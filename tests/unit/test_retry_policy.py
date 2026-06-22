@@ -1,3 +1,5 @@
+""" Test retry policy for EmailAuto."""
+
 from __future__ import annotations
 
 from emailauto.workers.retry_policy import retry_delay_seconds

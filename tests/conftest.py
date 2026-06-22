@@ -1,3 +1,5 @@
+""" Conftest for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest
@@ -52,6 +54,30 @@ def campaign_fixture(db):
         "campaign": campaign,
         "now": timezone.now(),
     }
+
+
+@pytest.fixture
+def admin_user(django_user_model):
+    return django_user_model.objects.create_superuser(username="admin", password="admin-pw", email="admin@example.com")
+
+
+@pytest.fixture
+def admin_client(client, admin_user):
+    client.force_login(admin_user)
+    return client
+
+
+@pytest.fixture
+def admin_request(admin_user):
+    """RequestFactory POST with messages middleware storage for admin action tests."""
+    from django.contrib.messages.storage.fallback import FallbackStorage
+    from django.test import RequestFactory
+
+    request = RequestFactory().post("/admin/")
+    request.user = admin_user
+    request.session = "session"
+    request._messages = FallbackStorage(request)  # noqa: SLF001
+    return request
 
 
 @pytest.fixture

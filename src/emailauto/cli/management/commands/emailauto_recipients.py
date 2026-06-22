@@ -1,3 +1,5 @@
+""" Create, import, list, and suppress recipients. Maps to the scope's `emailauto recipients`."""
+
 from __future__ import annotations
 
 import json

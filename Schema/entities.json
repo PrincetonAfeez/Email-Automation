@@ -1,0 +1,319 @@
+{
+  "project": "Email Automation Capstone",
+  "schema_package": "Schema",
+  "notes": [
+    "Reference schema generated from Django models and state constants.",
+    "Use Django migrations as the runtime source of truth.",
+    "Django auth/session/admin and django_celery_beat tables are omitted."
+  ],
+  "entities": [
+    {
+      "name": "EmailTemplate",
+      "table": "email_templates_emailtemplate",
+      "purpose": "Stores reusable subject/body templates and required render variables.",
+      "fields": [
+        "id",
+        "name",
+        "subject_template",
+        "body_template",
+        "body_format",
+        "required_variables",
+        "created_at",
+        "updated_at"
+      ],
+      "unique": [
+        "name"
+      ]
+    },
+    {
+      "name": "Recipient",
+      "table": "recipients_recipient",
+      "purpose": "Stores normalized recipient identity and custom personalization fields.",
+      "fields": [
+        "id",
+        "email",
+        "name",
+        "custom_fields",
+        "subscribed",
+        "created_at",
+        "updated_at"
+      ],
+      "unique": [
+        "email"
+      ]
+    },
+    {
+      "name": "RecipientList",
+      "table": "recipients_recipientlist",
+      "purpose": "Groups recipients into campaign target lists.",
+      "fields": [
+        "id",
+        "name",
+        "description",
+        "segment_metadata",
+        "created_at",
+        "updated_at"
+      ],
+      "unique": [
+        "name"
+      ]
+    },
+    {
+      "name": "RecipientListRecipients",
+      "table": "recipients_recipientlist_recipients",
+      "purpose": "Join table for RecipientList to Recipient many-to-many membership.",
+      "fields": [
+        "id",
+        "recipientlist_id",
+        "recipient_id"
+      ],
+      "unique": [
+        [
+          "recipientlist_id",
+          "recipient_id"
+        ]
+      ]
+    },
+    {
+      "name": "SuppressionEntry",
+      "table": "recipients_suppressionentry",
+      "purpose": "Stores recipients that should not receive sends.",
+      "fields": [
+        "id",
+        "email",
+        "reason",
+        "source",
+        "created_at"
+      ],
+      "unique": [
+        "email"
+      ]
+    },
+    {
+      "name": "Campaign",
+      "table": "campaigns_campaign",
+      "purpose": "Connects a template, recipient list, and lifecycle state.",
+      "fields": [
+        "id",
+        "name",
+        "template_id",
+        "recipient_list_id",
+        "status",
+        "status_before_pause",
+        "created_at",
+        "updated_at"
+      ],
+      "unique": [
+        "name"
+      ]
+    },
+    {
+      "name": "CampaignSchedule",
+      "table": "scheduling_campaignschedule",
+      "purpose": "Defines one-time or recurring schedule timing for a campaign.",
+      "fields": [
+        "id",
+        "campaign_id",
+        "schedule_type",
+        "send_at",
+        "cron_expression",
+        "interval_every",
+        "interval_period",
+        "timezone_name",
+        "enabled",
+        "last_run_at",
+        "next_run_at",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "name": "CampaignRun",
+      "table": "scheduling_campaignrun",
+      "purpose": "Represents one scheduled occurrence of a campaign.",
+      "fields": [
+        "id",
+        "campaign_id",
+        "schedule_id",
+        "run_key",
+        "scheduled_for",
+        "generated_at",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "unique": [
+        "run_key",
+        [
+          "schedule_id",
+          "scheduled_for"
+        ]
+      ]
+    },
+    {
+      "name": "EmailOutbox",
+      "table": "outbox_emailoutbox",
+      "purpose": "Durable send queue row for one recipient and one campaign run.",
+      "fields": [
+        "id",
+        "campaign_id",
+        "campaign_run_id",
+        "recipient_id",
+        "template_id",
+        "subject_snapshot",
+        "body_snapshot",
+        "required_variables_snapshot",
+        "body_format",
+        "idempotency_key",
+        "status",
+        "scheduled_for",
+        "next_attempt_at",
+        "attempt_count",
+        "max_attempts",
+        "locked_by",
+        "locked_at",
+        "claim_token",
+        "lock_version",
+        "celery_task_id",
+        "enqueued_at",
+        "started_at",
+        "sent_at",
+        "failed_at",
+        "dead_lettered_at",
+        "last_error",
+        "created_at",
+        "updated_at"
+      ],
+      "unique": [
+        "idempotency_key"
+      ]
+    },
+    {
+      "name": "EmailSendAttempt",
+      "table": "outbox_emailsendattempt",
+      "purpose": "Records each provider send attempt for an outbox row.",
+      "fields": [
+        "id",
+        "outbox_id",
+        "attempt_number",
+        "worker_id",
+        "celery_task_id",
+        "provider_name",
+        "started_at",
+        "completed_at",
+        "result",
+        "error_code",
+        "error_message",
+        "provider_response_metadata"
+      ],
+      "unique": [
+        [
+          "outbox_id",
+          "attempt_number"
+        ]
+      ]
+    },
+    {
+      "name": "EmailEventLog",
+      "table": "outbox_emaileventlog",
+      "purpose": "Durable audit/event log across campaign, run, outbox, and recipient lifecycle.",
+      "fields": [
+        "id",
+        "event_type",
+        "campaign_id",
+        "campaign_run_id",
+        "outbox_id",
+        "recipient_id",
+        "message",
+        "metadata",
+        "created_at"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "Campaign.template_id",
+      "to": "EmailTemplate.id",
+      "cardinality": "many-to-one",
+      "delete": "RESTRICT"
+    },
+    {
+      "from": "Campaign.recipient_list_id",
+      "to": "RecipientList.id",
+      "cardinality": "many-to-one",
+      "delete": "RESTRICT"
+    },
+    {
+      "from": "RecipientListRecipients.recipientlist_id",
+      "to": "RecipientList.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "RecipientListRecipients.recipient_id",
+      "to": "Recipient.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "CampaignSchedule.campaign_id",
+      "to": "Campaign.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "CampaignRun.campaign_id",
+      "to": "Campaign.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "CampaignRun.schedule_id",
+      "to": "CampaignSchedule.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "EmailOutbox.campaign_id",
+      "to": "Campaign.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "EmailOutbox.campaign_run_id",
+      "to": "CampaignRun.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "EmailOutbox.recipient_id",
+      "to": "Recipient.id",
+      "cardinality": "many-to-one",
+      "delete": "RESTRICT"
+    },
+    {
+      "from": "EmailOutbox.template_id",
+      "to": "EmailTemplate.id",
+      "cardinality": "many-to-one",
+      "delete": "RESTRICT"
+    },
+    {
+      "from": "EmailSendAttempt.outbox_id",
+      "to": "EmailOutbox.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "EmailEventLog.outbox_id",
+      "to": "EmailOutbox.id",
+      "cardinality": "many-to-one",
+      "delete": "CASCADE"
+    },
+    {
+      "from": "EmailEventLog.recipient_id",
+      "to": "Recipient.id",
+      "cardinality": "many-to-one",
+      "delete": "SET NULL"
+    }
+  ]
+}

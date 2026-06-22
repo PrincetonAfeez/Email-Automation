@@ -1,0 +1,139 @@
+erDiagram
+    EMAIL_TEMPLATE ||--o{ CAMPAIGN : uses
+    RECIPIENT_LIST ||--o{ CAMPAIGN : targets
+    RECIPIENT_LIST ||--o{ RECIPIENT_LIST_RECIPIENTS : contains
+    RECIPIENT ||--o{ RECIPIENT_LIST_RECIPIENTS : member_of
+    CAMPAIGN ||--o{ CAMPAIGN_SCHEDULE : has
+    CAMPAIGN ||--o{ CAMPAIGN_RUN : produces
+    CAMPAIGN_SCHEDULE ||--o{ CAMPAIGN_RUN : occurs_as
+    CAMPAIGN ||--o{ EMAIL_OUTBOX : queues
+    CAMPAIGN_RUN ||--o{ EMAIL_OUTBOX : generates
+    RECIPIENT ||--o{ EMAIL_OUTBOX : receives
+    EMAIL_TEMPLATE ||--o{ EMAIL_OUTBOX : snapshotted_from
+    EMAIL_OUTBOX ||--o{ EMAIL_SEND_ATTEMPT : attempts
+    CAMPAIGN ||--o{ EMAIL_EVENT_LOG : logs
+    CAMPAIGN_RUN ||--o{ EMAIL_EVENT_LOG : logs
+    EMAIL_OUTBOX ||--o{ EMAIL_EVENT_LOG : logs
+    RECIPIENT ||--o{ EMAIL_EVENT_LOG : logs
+
+    EMAIL_TEMPLATE {
+        bigint id PK
+        varchar name UK
+        text subject_template
+        text body_template
+        varchar body_format
+        jsonb required_variables
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RECIPIENT {
+        bigint id PK
+        varchar email UK
+        varchar name
+        jsonb custom_fields
+        boolean subscribed
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RECIPIENT_LIST {
+        bigint id PK
+        varchar name UK
+        text description
+        jsonb segment_metadata
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RECIPIENT_LIST_RECIPIENTS {
+        bigint id PK
+        bigint recipientlist_id FK
+        bigint recipient_id FK
+    }
+
+    SUPPRESSION_ENTRY {
+        bigint id PK
+        varchar email UK
+        varchar reason
+        varchar source
+        timestamptz created_at
+    }
+
+    CAMPAIGN {
+        bigint id PK
+        varchar name UK
+        bigint template_id FK
+        bigint recipient_list_id FK
+        varchar status
+        varchar status_before_pause
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    CAMPAIGN_SCHEDULE {
+        bigint id PK
+        bigint campaign_id FK
+        varchar schedule_type
+        timestamptz send_at
+        varchar cron_expression
+        integer interval_every
+        varchar interval_period
+        varchar timezone_name
+        boolean enabled
+        timestamptz last_run_at
+        timestamptz next_run_at
+    }
+
+    CAMPAIGN_RUN {
+        bigint id PK
+        bigint campaign_id FK
+        bigint schedule_id FK
+        varchar run_key UK
+        timestamptz scheduled_for
+        timestamptz generated_at
+        varchar status
+    }
+
+    EMAIL_OUTBOX {
+        bigint id PK
+        bigint campaign_id FK
+        bigint campaign_run_id FK
+        bigint recipient_id FK
+        bigint template_id FK
+        text subject_snapshot
+        text body_snapshot
+        jsonb required_variables_snapshot
+        varchar body_format
+        varchar idempotency_key UK
+        varchar status
+        timestamptz scheduled_for
+        integer attempt_count
+        integer max_attempts
+        varchar claim_token
+        integer lock_version
+    }
+
+    EMAIL_SEND_ATTEMPT {
+        bigint id PK
+        bigint outbox_id FK
+        integer attempt_number
+        varchar worker_id
+        varchar provider_name
+        timestamptz started_at
+        timestamptz completed_at
+        varchar result
+        jsonb provider_response_metadata
+    }
+
+    EMAIL_EVENT_LOG {
+        bigint id PK
+        varchar event_type
+        bigint campaign_id FK
+        bigint campaign_run_id FK
+        bigint outbox_id FK
+        bigint recipient_id FK
+        text message
+        jsonb metadata
+        timestamptz created_at
+    }

@@ -1,3 +1,5 @@
+""" Initialise the database (apply migrations). Maps to the scope's `emailauto init-db`."""
+
 from __future__ import annotations
 
 from django.core.management import call_command

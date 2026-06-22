@@ -1,3 +1,5 @@
+""" Dispatcher for EmailAuto."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,11 +11,11 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from emailauto.core.states import CampaignRunStatus, CampaignStatus, EventType, OutboxStatus, ScheduleType
+from emailauto.core.states import CampaignRunStatus, CampaignStatus, EventType, OutboxStatus, ScheduleType, assert_campaign_run_transition
 from emailauto.observability.events import record_event
 from emailauto.observability.logging import log_event
 from emailauto.outbox.models import EmailOutbox
-from emailauto.outbox.transitions import enqueue_outbox_row
+from emailauto.outbox.transitions import enqueue_outbox_row, transition_outbox
 from emailauto.scheduling.due_scanner import due_schedules
 from emailauto.scheduling.models import CampaignRun, CampaignSchedule
 from emailauto.scheduling.recurrence import next_occurrence
@@ -27,7 +29,14 @@ _RUN_TERMINAL = {
     OutboxStatus.SKIPPED_SUPPRESSED,
 }
 _RUN_FAILED = {OutboxStatus.FAILED, OutboxStatus.DEAD_LETTERED}
-_RUN_INFLIGHT = {OutboxStatus.ENQUEUED, OutboxStatus.CLAIMED, OutboxStatus.SENDING, OutboxStatus.RETRY_SCHEDULED}
+_RUN_INFLIGHT = {
+    OutboxStatus.PENDING,
+    OutboxStatus.ENQUEUED,
+    OutboxStatus.CLAIMED,
+    OutboxStatus.SENDING,
+    OutboxStatus.RETRY_SCHEDULED,
+    OutboxStatus.REQUEUED,
+}
 
 
 @dataclass
@@ -111,12 +120,19 @@ def create_run_and_outbox(schedule: CampaignSchedule, *, batch_size: int = 500) 
             _advance_schedule(locked_schedule, scheduled_for)
             return run, 0, False
 
-        if run.status != CampaignRunStatus.GENERATING_OUTBOX:
+        if run.status == CampaignRunStatus.PENDING:
+            assert_campaign_run_transition(run.status, CampaignRunStatus.GENERATING_OUTBOX)
             run.status = CampaignRunStatus.GENERATING_OUTBOX
             run.generated_at = run.generated_at or timezone.now()
             run.save(update_fields=["status", "generated_at", "updated_at"])
+        elif run.status == CampaignRunStatus.GENERATING_OUTBOX and not run.generated_at:
+            run.generated_at = timezone.now()
+            run.save(update_fields=["generated_at", "updated_at"])
 
         campaign = locked_schedule.campaign
+        from emailauto.campaigns.services import promote_campaign_to_active
+
+        promote_campaign_to_active(campaign.id)
         template = campaign.template
         all_recipients = campaign.recipient_list.recipients
         already_generated = EmailOutbox.objects.filter(campaign_run=run).values("recipient_id")
@@ -153,6 +169,7 @@ def create_run_and_outbox(schedule: CampaignSchedule, *, batch_size: int = 500) 
         generated_rows = EmailOutbox.objects.filter(campaign_run=run).count()
         occurrence_complete = generated_rows >= total_recipients
         if occurrence_complete:
+            assert_campaign_run_transition(run.status, CampaignRunStatus.OUTBOX_GENERATED)
             run.status = CampaignRunStatus.OUTBOX_GENERATED
             run.save(update_fields=["status", "updated_at"])
             record_event(EventType.SCHEDULED, campaign=campaign, campaign_run=run, metadata={"generated_outbox": generated_rows})
@@ -242,14 +259,27 @@ def _recover_stale_claims(*, now, limit: int, campaign_statuses: list[str] | Non
     return recovered
 
 
+def _rollback_failed_publish(outbox_id: int) -> None:
+    """Release a freshly enqueued row when Celery publish fails."""
+    transition_outbox(
+        outbox_id,
+        OutboxStatus.RETRY_SCHEDULED,
+        force=True,
+        last_error="celery publish failed",
+        next_attempt_at=timezone.now(),
+        metadata={"recovery": "publish_failed"},
+    )
+
+
 def enqueue_outbox_by_id(outbox_id: int, *, enqueue_celery: bool = False) -> bool:
     """Mark one due row enqueued and optionally publish its worker task."""
     celery_task_id = uuid4().hex if enqueue_celery else ""
     enqueued = enqueue_outbox_row(outbox_id, celery_task_id=celery_task_id)
     if enqueued is None:
         return False
-    if enqueue_celery:
-        _publish_task(outbox_id, celery_task_id)
+    if enqueue_celery and not _publish_task(outbox_id, celery_task_id):
+        _rollback_failed_publish(outbox_id)
+        return False
     return True
 
 
@@ -273,8 +303,9 @@ def enqueue_due_outbox(*, limit: int = 500, enqueue_celery: bool = False, campai
         if enqueued is None:
             continue
         count += 1
-        if enqueue_celery:
-            _publish_task(row.id, celery_task_id)
+        if enqueue_celery and not _publish_task(row.id, celery_task_id):
+            _rollback_failed_publish(row.id)
+            count -= 1
     if enqueue_celery:
         _recover_stale_enqueued(now=now, limit=limit, active_statuses=active_statuses)
     return count
@@ -322,6 +353,7 @@ def reconcile_campaign_runs(*, limit: int = 500) -> int:
         else:
             new_status = run.status
         if new_status != run.status:
+            assert_campaign_run_transition(run.status, new_status)
             run.status = new_status
             run.save(update_fields=["status", "updated_at"])
             reconciled += 1

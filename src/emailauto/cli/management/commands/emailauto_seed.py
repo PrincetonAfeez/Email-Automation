@@ -1,5 +1,9 @@
+""" Populate the database with sample data (campaigns, runs, outbox rows in mixed states, schedules) so the web UI is explorable. Uses the fake backend — never sends real email. Maps to the scope's `emailauto seed`."""  
+
 from __future__ import annotations
 
+import os
+import secrets
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
@@ -28,6 +32,23 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument("--reset", action="store_true", help="Delete all existing emailauto data first.")
         parser.add_argument("--noinput", action="store_true", help="Required with --reset to confirm destructive reset.")
+        parser.add_argument(
+            "--create-operator",
+            action="store_true",
+            default=True,
+            help="Create or update the demo operator account (default: on).",
+        )
+        parser.add_argument(
+            "--no-create-operator",
+            dest="create_operator",
+            action="store_false",
+            help="Skip creating the demo operator account.",
+        )
+        parser.add_argument(
+            "--operator-password",
+            default="",
+            help="Password for the demo operator (default: EMAILAUTO_SEED_OPERATOR_PASSWORD env or a random value).",
+        )
 
     def handle(self, *args, **options):
         if options["reset"]:
@@ -35,6 +56,9 @@ class Command(BaseCommand):
                 raise CommandError("Destructive reset requires --noinput to confirm.")
             self._reset()
         FakeEmailBackend.clear()
+        operator_password = ""
+        if options["create_operator"]:
+            operator_password = self._ensure_operator_user(options["operator_password"])
 
         template = EmailTemplate.objects.create(
             name="seed-welcome",
@@ -67,7 +91,7 @@ class Command(BaseCommand):
             send_at=timezone.now() + timedelta(days=1),
         )
 
-        # A second, paused campaign with an interval schedule — visible on the Schedules page.
+        # A second, paused campaign with a disabled interval schedule (cannot be enabled while paused).
         paused = Campaign.objects.create(
             name="seed-weekly-digest",
             template=template,
@@ -80,6 +104,7 @@ class Command(BaseCommand):
             interval_every=1,
             interval_period=CampaignSchedule.IntervalPeriod.DAYS,
             send_at=timezone.now() + timedelta(hours=6),
+            enabled=False,
         )
 
         dispatch_due_schedules()
@@ -102,7 +127,24 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Seeded sample data:"))
         self.stdout.write(f"  campaigns={Campaign.objects.count()} schedules={CampaignSchedule.objects.count()} runs={CampaignRun.objects.count()}")
         self.stdout.write(f"  outbox rows={EmailOutbox.objects.count()} attempts={EmailSendAttempt.objects.count()} events={EmailEventLog.objects.count()}")
+        if options["create_operator"]:
+            self.stdout.write("  Operator login: username=operator (has campaigns.operate_campaign)")
+            self.stdout.write(f"  Operator password: {operator_password}")
         self.stdout.write("  Visit / (login required), /schedules/, and /dlq/ to explore.")
+
+    def _ensure_operator_user(self, password: str = "") -> str:
+        from django.contrib.auth.models import Permission, User
+        from django.contrib.contenttypes.models import ContentType
+
+        resolved = password or os.getenv("EMAILAUTO_SEED_OPERATOR_PASSWORD") or secrets.token_urlsafe(12)
+        user, created = User.objects.get_or_create(username="operator", defaults={"email": "operator@example.com"})
+        if created or not user.check_password(resolved):
+            user.set_password(resolved)
+            user.save(update_fields=["password"])
+        content_type = ContentType.objects.get_for_model(Campaign)
+        permission = Permission.objects.get(content_type=content_type, codename="operate_campaign")
+        user.user_permissions.add(permission)
+        return resolved
 
     def _reset(self) -> None:
         EmailSendAttempt.objects.all().delete()

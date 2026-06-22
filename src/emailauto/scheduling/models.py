@@ -1,10 +1,12 @@
+""" Models for EmailAuto."""
+
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
-from emailauto.core.states import CampaignRunStatus, ScheduleType
+from emailauto.core.states import CampaignRunStatus, CampaignStatus, ScheduleType
 
 
 class CampaignSchedule(models.Model):
@@ -50,6 +52,21 @@ class CampaignSchedule(models.Model):
                 validate_cron_expression(self.cron_expression)
             except ValueError as exc:
                 raise ValidationError({"cron_expression": str(exc)}) from exc
+        if self.enabled and self.campaign_id:
+            campaign = getattr(self, "campaign", None)
+            if campaign is None or campaign.pk != self.campaign_id:
+                from emailauto.campaigns.models import Campaign
+
+                campaign = Campaign.objects.filter(pk=self.campaign_id).first()
+            if campaign and campaign.status in {
+                CampaignStatus.CANCELLED,
+                CampaignStatus.COMPLETED,
+                CampaignStatus.DRAFT,
+                CampaignStatus.PAUSED,
+            }:
+                raise ValidationError(
+                    {"enabled": f"Cannot enable a schedule while campaign '{campaign.name}' is in status '{campaign.status}'."}
+                )
 
     def save(self, *args, **kwargs):
         if self.schedule_type == ScheduleType.ONE_TIME and self.send_at:

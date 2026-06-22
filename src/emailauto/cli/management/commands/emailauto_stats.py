@@ -1,3 +1,5 @@
+""" Print dashboard stats, or per-campaign stats. Maps to the scope's `emailauto stats`."""
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser

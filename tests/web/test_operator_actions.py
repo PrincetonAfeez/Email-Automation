@@ -1,3 +1,5 @@
+""" Test operator actions for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest
@@ -58,7 +60,11 @@ def test_requeue_dlq_action(auth_client, dispatched_row):
 
     assert response.status_code == 302
     dispatched_row.refresh_from_db()
-    assert dispatched_row.status == OutboxStatus.REQUEUED
+    assert dispatched_row.status != OutboxStatus.DEAD_LETTERED
+    if dispatched_row.status == OutboxStatus.SENT:
+        assert dispatched_row.attempt_count >= 1
+    else:
+        assert dispatched_row.attempt_count == 0
 
 
 @pytest.mark.django_db

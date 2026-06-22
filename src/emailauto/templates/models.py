@@ -1,3 +1,5 @@
+""" Models for EmailAuto."""
+
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError

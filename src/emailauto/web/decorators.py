@@ -1,3 +1,5 @@
+""" Decorators for EmailAuto."""
+
 from __future__ import annotations
 
 from functools import wraps
@@ -32,7 +34,7 @@ def operator_rate_limit(view_func):
         if request.method == "POST" and request.user.is_authenticated:
             limit = settings.EMAILAUTO_OPERATOR_RATE_LIMIT
             if limit > 0:
-                key = f"operator_rate:{request.user.pk}:{view_func.__name__}"
+                key = f"operator_rate:{request.user.pk}"
                 cache.add(key, 0, timeout=60)
                 try:
                     count = cache.incr(key)

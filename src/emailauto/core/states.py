@@ -1,3 +1,5 @@
+""" States for EmailAuto."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -38,7 +40,7 @@ class CampaignStatus:
 
 CAMPAIGN_TRANSITIONS: dict[str, set[str]] = {
     CampaignStatus.DRAFT: {CampaignStatus.SCHEDULED, CampaignStatus.CANCELLED},
-    CampaignStatus.SCHEDULED: {CampaignStatus.ACTIVE, CampaignStatus.PAUSED, CampaignStatus.CANCELLED},
+    CampaignStatus.SCHEDULED: {CampaignStatus.ACTIVE, CampaignStatus.PAUSED, CampaignStatus.CANCELLED, CampaignStatus.COMPLETED},
     CampaignStatus.ACTIVE: {CampaignStatus.PAUSED, CampaignStatus.COMPLETED, CampaignStatus.CANCELLED},
     CampaignStatus.PAUSED: set(),  # resume restores status_before_pause via service layer
     CampaignStatus.COMPLETED: set(),
@@ -71,6 +73,34 @@ class CampaignRunStatus:
         (FAILED, "Failed"),
         (CANCELLED, "Cancelled"),
     ]
+
+    TERMINAL = frozenset({COMPLETED, FAILED, CANCELLED})
+
+
+CAMPAIGN_RUN_TRANSITIONS: dict[str, set[str]] = {
+    CampaignRunStatus.PENDING: {CampaignRunStatus.GENERATING_OUTBOX, CampaignRunStatus.CANCELLED},
+    CampaignRunStatus.GENERATING_OUTBOX: {CampaignRunStatus.OUTBOX_GENERATED, CampaignRunStatus.CANCELLED},
+    CampaignRunStatus.OUTBOX_GENERATED: {
+        CampaignRunStatus.DISPATCHING,
+        CampaignRunStatus.COMPLETED,
+        CampaignRunStatus.CANCELLED,
+    },
+    CampaignRunStatus.DISPATCHING: {
+        CampaignRunStatus.DISPATCHED,
+        CampaignRunStatus.COMPLETED,
+        CampaignRunStatus.FAILED,
+        CampaignRunStatus.CANCELLED,
+    },
+    CampaignRunStatus.DISPATCHED: {CampaignRunStatus.COMPLETED, CampaignRunStatus.FAILED, CampaignRunStatus.CANCELLED},
+    CampaignRunStatus.COMPLETED: set(),
+    CampaignRunStatus.FAILED: set(),
+    CampaignRunStatus.CANCELLED: set(),
+}
+
+
+def assert_campaign_run_transition(current: str, target: str) -> None:
+    if target not in CAMPAIGN_RUN_TRANSITIONS.get(current, set()):
+        raise InvalidStateTransition(f"Illegal CampaignRun transition: {current} -> {target}")
 
 
 class OutboxStatus:
@@ -134,6 +164,8 @@ class EventType:
     SKIPPED_SUPPRESSED = "skipped_suppressed"
     CANCELLED = "cancelled"
     DISPATCHED = "dispatched"
+    CAMPAIGN_COMPLETED = "campaign_completed"
+    OPERATOR_ACTION = "operator_action"
 
     CHOICES = [
         (SCHEDULED, "Scheduled"),
@@ -149,30 +181,34 @@ class EventType:
         (SKIPPED_SUPPRESSED, "Skipped suppressed"),
         (CANCELLED, "Cancelled"),
         (DISPATCHED, "Dispatched"),
+        (CAMPAIGN_COMPLETED, "Campaign completed"),
+        (OPERATOR_ACTION, "Operator action"),
     ]
 
 
 OUTBOX_TRANSITIONS: dict[str, set[str]] = {
     OutboxStatus.PENDING: {OutboxStatus.ENQUEUED, OutboxStatus.CLAIMED, OutboxStatus.SKIPPED_SUPPRESSED, OutboxStatus.CANCELLED},
     OutboxStatus.ENQUEUED: {OutboxStatus.CLAIMED, OutboxStatus.CANCELLED, OutboxStatus.RETRY_SCHEDULED},
-    OutboxStatus.REQUEUED: {OutboxStatus.PENDING, OutboxStatus.ENQUEUED, OutboxStatus.CLAIMED, OutboxStatus.CANCELLED},
+    OutboxStatus.REQUEUED: {OutboxStatus.ENQUEUED, OutboxStatus.CLAIMED, OutboxStatus.CANCELLED},
     # A pre-send check (suppression, cancelled/paused campaign) is resolved while the
     # row is still CLAIMED, before it ever moves to SENDING. RETRY_SCHEDULED lets a
     # claim holder release a row it cannot send yet (e.g. a paused campaign).
     OutboxStatus.CLAIMED: {
         OutboxStatus.SENDING,
+        OutboxStatus.SENT,
         OutboxStatus.SKIPPED_SUPPRESSED,
         OutboxStatus.CANCELLED,
         OutboxStatus.RETRY_SCHEDULED,
     },
-    OutboxStatus.SENDING: {OutboxStatus.SENT, OutboxStatus.RETRY_SCHEDULED, OutboxStatus.FAILED, OutboxStatus.DEAD_LETTERED},
-    # A scheduled retry can be re-enqueued, claimed directly by a worker, cancelled by
-    # an operator, or abandoned to the DLQ when its attempts are exhausted.
+    OutboxStatus.SENDING: {OutboxStatus.SENT, OutboxStatus.RETRY_SCHEDULED, OutboxStatus.FAILED, OutboxStatus.DEAD_LETTERED, OutboxStatus.CANCELLED},
+    # Retries are re-enqueued or claimed directly; post-attempt reconcile may also land here.
     OutboxStatus.RETRY_SCHEDULED: {
         OutboxStatus.ENQUEUED,
         OutboxStatus.CLAIMED,
-        OutboxStatus.CANCELLED,
+        OutboxStatus.SENT,
+        OutboxStatus.FAILED,
         OutboxStatus.DEAD_LETTERED,
+        OutboxStatus.CANCELLED,
     },
     OutboxStatus.DEAD_LETTERED: {OutboxStatus.REQUEUED},
     # FAILED rows are terminal under automatic processing but an operator may requeue them.

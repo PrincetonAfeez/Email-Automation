@@ -1,3 +1,5 @@
+""" Console email provider for EmailAuto."""
+
 from __future__ import annotations
 
 from emailauto.core.results import RenderedEmail, SendResult

@@ -1,4 +1,4 @@
-"""UNSAFE: a dispatcher without a deterministic idempotency key.
+"""UNSAFE: a dispatcher without a deterministic idempotency key
 
 Teaching point: the production dispatcher derives a stable key from
 campaign + run + recipient and uses get_or_create, so a repeated dispatch is a no-op.

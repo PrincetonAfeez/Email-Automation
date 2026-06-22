@@ -1,3 +1,5 @@
+""" Test idempotency key for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest

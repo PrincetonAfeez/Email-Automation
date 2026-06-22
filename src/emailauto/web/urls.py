@@ -1,3 +1,5 @@
+""" URLs for EmailAuto."""
+
 from __future__ import annotations
 
 from django.contrib.auth import views as auth_views
@@ -11,6 +13,7 @@ urlpatterns = [
     # Standalone operator login/logout (any active user, not only Django staff).
     path("accounts/login/", auth_views.LoginView.as_view(template_name="emailauto/login.html"), name="login"),
     path("accounts/logout/", auth_views.LogoutView.as_view(next_page="emailauto:login"), name="logout"),
+    path("health/", views.health, name="health"),
     path("", views.dashboard, name="dashboard"),
     path("schedules/", views.schedules, name="schedules"),
     path("runs/<int:run_id>/", views.campaign_run_detail, name="campaign_run_detail"),
@@ -21,6 +24,8 @@ urlpatterns = [
     path("dlq/", views.dlq, name="dlq"),
     path("dlq/<int:outbox_id>/requeue/", views.requeue_dlq, name="requeue_dlq"),
     path("suppress/", views.add_suppression, name="add_suppression"),
+    path("unsuppress/", views.remove_suppression, name="remove_suppression"),
+    path("subscription/", views.set_subscription, name="set_subscription"),
     path("partials/stats/", views.stats_partial, name="stats_partial"),
     path("partials/outbox/", views.outbox_table_partial, name="outbox_table_partial"),
     path("partials/system/", views.system_partial, name="system_partial"),

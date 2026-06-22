@@ -1,3 +1,5 @@
+""" Test stale enqueue recovery for EmailAuto."""
+
 from __future__ import annotations
 
 from datetime import timedelta

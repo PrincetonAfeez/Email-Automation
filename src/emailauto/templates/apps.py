@@ -1,3 +1,5 @@
+""" Templates app for EmailAuto."""
+
 from __future__ import annotations
 
 from django.apps import AppConfig

@@ -1,3 +1,5 @@
+""" Attempts for EmailAuto."""
+
 from __future__ import annotations
 
 from django.utils import timezone
@@ -9,9 +11,12 @@ from emailauto.outbox.models import EmailOutbox, EmailSendAttempt
 
 
 def start_attempt(*, outbox: EmailOutbox, worker_id: str, celery_task_id: str, provider_name: str) -> EmailSendAttempt:
+    max_existing = (
+        EmailSendAttempt.objects.filter(outbox=outbox).order_by("-attempt_number").values_list("attempt_number", flat=True).first()
+    ) or 0
     attempt = EmailSendAttempt.objects.create(
         outbox=outbox,
-        attempt_number=outbox.attempt_count + 1,
+        attempt_number=max_existing + 1,
         worker_id=worker_id,
         celery_task_id=celery_task_id,
         provider_name=provider_name,

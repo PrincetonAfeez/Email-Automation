@@ -1,3 +1,5 @@
+""" Test template renderer for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest

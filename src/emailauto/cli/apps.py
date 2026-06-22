@@ -1,3 +1,5 @@
+""" Command-line interface for EmailAuto. Maps to the scope's `emailauto`."""
+
 from __future__ import annotations
 
 from django.apps import AppConfig

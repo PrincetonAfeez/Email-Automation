@@ -1,3 +1,5 @@
+""" Test state transitions for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest
@@ -29,7 +31,12 @@ def test_failed_and_dead_lettered_can_be_requeued():
     assert_outbox_transition(OutboxStatus.DEAD_LETTERED, OutboxStatus.REQUEUED)
 
 
-def test_retry_scheduled_can_dead_letter():
+def test_post_send_reconcile_allows_retry_scheduled_to_sent():
+    assert_outbox_transition(OutboxStatus.RETRY_SCHEDULED, OutboxStatus.SENT)
+
+
+def test_post_attempt_reconcile_allows_retry_scheduled_to_failed_or_dead_lettered():
+    assert_outbox_transition(OutboxStatus.RETRY_SCHEDULED, OutboxStatus.FAILED)
     assert_outbox_transition(OutboxStatus.RETRY_SCHEDULED, OutboxStatus.DEAD_LETTERED)
 
 

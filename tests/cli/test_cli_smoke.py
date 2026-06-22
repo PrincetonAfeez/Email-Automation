@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 from io import StringIO
 
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+
+
+@pytest.mark.django_db
+def test_cli_version_prints_package_version():
+    out = StringIO()
+    call_command("emailauto_version", stdout=out)
+    try:
+        expected = version("email-automation-capstone")
+    except PackageNotFoundError:
+        expected = "unknown"
+    assert out.getvalue().strip() == expected
 
 
 @pytest.mark.django_db

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def run_demo() -> dict[str, str]:
     cached_state = "pending"
     durable_state = "sent"

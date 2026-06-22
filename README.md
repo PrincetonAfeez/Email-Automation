@@ -34,17 +34,20 @@ See [docs/architecture.md](docs/architecture.md) for the full diagram and compon
 - Send attempts, audit events, retry scheduling, and dead-letter requeue.
 - Redis/Django-cache dashboard stats and send throttling helpers.
 - Django Admin registrations and actions.
-- HTMX dashboard at `/`, DLQ view at `/dlq/`, Django Admin at `/admin/`.
+- HTMX dashboard at `/`, DLQ view at `/dlq/`, Django Admin at `/admin/`. See
+  [docs/web_routes.md](docs/web_routes.md) for the full route reference.
 - Operator actions from the dashboard: trigger/pause/resume/cancel a campaign, retry or
   cancel an outbox row, requeue dead letters, and add suppressions — all through the
   shared service layer.
 - CLI commands for init-db, template, recipient, campaign, schedule, dispatch, outbox,
-  DLQ, stats, sample-data seeding, and both safe and unsafe demos.
+  DLQ, stats, sample-data seeding, and both safe and unsafe demos. See [docs/cli.md](docs/cli.md)
+  for the full command and flag reference.
 - Operator web views: dashboard (live stats, throughput, rate-limit status), schedule
-  visibility, per-campaign and per-run pages, and the DLQ.
-- Pytest suite (353 tests, ~99% coverage) for reliability paths (idempotency, claims,
-  retries, DLQ, suppression-at-send, batching, cron, throttling, operator actions),
-  full CLI/admin/web coverage, and teaching demos.
+  visibility, per-campaign and per-run pages, and the DLQ. Full routes:
+  [docs/web_routes.md](docs/web_routes.md).
+- Pytest suite (353 tests) covering the CLI, admin, web views, dispatcher, worker
+  reliability paths (idempotency, claims, retries, DLQ, suppression-at-send, batching,
+  cron, throttling, operator actions), and teaching demos.
 
 ## Setup
 
@@ -79,7 +82,7 @@ the password is random (printed once) or set via `EMAILAUTO_SEED_OPERATOR_PASSWO
 The dashboard and operator actions require a logged-in user with that permission (grant via
 Django admin or assign to staff). Anonymous requests are redirected to the operator login
 at `/accounts/login/`; create an account with `createsuperuser` (above) or use the seeded
-operator account.
+operator account. Route details: [docs/web_routes.md](docs/web_routes.md).
 HTMX is vendored under `src/emailauto/web/static/emailauto/vendor/` (no CDN dependency);
 run `collectstatic` for production.
 
@@ -119,6 +122,12 @@ Tests and demos should use `fake` or `console`.
 
 ## CLI Demo
 
+Check the installed package version:
+
+```powershell
+python manage.py emailauto_version
+```
+
 ```powershell
 python manage.py emailauto_template create --name Welcome --subject "Hi {{ recipient.name }}" --body "Hello {{ first_name }}" --required "[\"first_name\"]"
 python manage.py emailauto_recipients add --email ada@example.com --name Ada --fields "{\"first_name\":\"Ada\"}" --list Demo
@@ -134,6 +143,29 @@ To enqueue Celery tasks instead of sending manually:
 
 ```powershell
 python manage.py emailauto_dispatch --enqueue-celery
+```
+
+For the full CLI reference, see [docs/cli.md](docs/cli.md).
+
+## CLI exit codes
+
+Django management commands follow Django's standard behavior:
+
+- **0** — command completed successfully
+- **1** — `CommandError`, validation failure, bad input, or runtime failure
+- **2** — argparse/parser usage error, such as missing required arguments or invalid choices
+
+Examples:
+
+```powershell
+python manage.py emailauto_template create --name Welcome --subject "Hi" --body "Body"
+echo $LASTEXITCODE   # 0
+
+python manage.py emailauto_template create --name Welcome --subject "Hi" --body "Body" --required "{bad json}"
+echo $LASTEXITCODE   # 1
+
+python manage.py emailauto_template create --name Welcome --subject "Hi"
+echo $LASTEXITCODE   # 2 (missing --body)
 ```
 
 ## Demos
@@ -168,17 +200,20 @@ tokens, enforced state transitions, and audit records.
 
 ## Tests & quality gates
 
-The same checks run in CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
+The test suite covers the CLI, admin, web views, dispatcher, worker reliability paths,
+and operator actions. CI runs Ruff, mypy, Django system checks, migration checks, and
+pytest with a 99% coverage gate ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
 
 ```powershell
-ruff check src tests          # lint + import order
-mypy src                      # type check (django-stubs)
+ruff check src tests
+mypy src
 python manage.py check
 python manage.py makemigrations --check --dry-run
-pytest --cov=emailauto --cov-report=term-missing --cov-fail-under=99   # 353 tests, ~99% coverage
+pytest --cov=emailauto --cov-report=term-missing --cov-fail-under=99
 ```
 
 For a structured reviewer walkthrough, see [docs/portfolio_walkthrough.md](docs/portfolio_walkthrough.md).
+Web route test coverage is mapped in [docs/test_matrix.md](docs/test_matrix.md).
 
 ## Production notes
 

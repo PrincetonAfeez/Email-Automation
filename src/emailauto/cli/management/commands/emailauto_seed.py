@@ -1,4 +1,4 @@
-""" Populate the database with sample data (campaigns, runs, outbox rows in mixed states, schedules) so the web UI is explorable. Uses the fake backend — never sends real email. Maps to the scope's `emailauto seed`."""  
+""" Populate the database with sample data (campaigns, runs, outbox rows in mixed states, schedules) so the web UI is explorable. Uses the fake backend — never sends real email. Maps to the scope's `emailauto seed`."""
 
 from __future__ import annotations
 

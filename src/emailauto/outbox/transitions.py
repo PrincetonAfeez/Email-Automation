@@ -1,3 +1,5 @@
+""" Transitions for EmailAuto."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -69,10 +71,17 @@ def transition_outbox(
             outbox.locked_by = ""
             outbox.claim_token = ""
             outbox.locked_at = None
+            outbox.enqueued_at = None
+            outbox.celery_task_id = ""
         elif target_status == OutboxStatus.SKIPPED_SUPPRESSED:
             outbox.last_error = last_error
         elif target_status == OutboxStatus.CANCELLED:
             outbox.last_error = last_error
+            outbox.locked_by = ""
+            outbox.claim_token = ""
+            outbox.locked_at = None
+            outbox.enqueued_at = None
+            outbox.celery_task_id = ""
 
         outbox.save()
         event_type = EVENT_FOR_STATUS.get(target_status)
@@ -101,9 +110,13 @@ def enqueue_outbox_row(outbox_id: int, *, celery_task_id: str = "") -> EmailOutb
 def _mark_run_dispatching(campaign_run_id: int | None) -> None:
     if not campaign_run_id:
         return
-    from emailauto.core.states import CampaignRunStatus
+    from emailauto.core.states import CampaignRunStatus, assert_campaign_run_transition
     from emailauto.scheduling.models import CampaignRun
 
+    run = CampaignRun.objects.filter(pk=campaign_run_id, status=CampaignRunStatus.OUTBOX_GENERATED).first()
+    if run is None:
+        return
+    assert_campaign_run_transition(run.status, CampaignRunStatus.DISPATCHING)
     CampaignRun.objects.filter(pk=campaign_run_id, status=CampaignRunStatus.OUTBOX_GENERATED).update(
         status=CampaignRunStatus.DISPATCHING,
         updated_at=timezone.now(),

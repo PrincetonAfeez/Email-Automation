@@ -1,3 +1,5 @@
+""" Test retry task for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest

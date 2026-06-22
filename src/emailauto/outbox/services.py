@@ -1,3 +1,5 @@
+""" Services for EmailAuto."""
+
 from __future__ import annotations
 
 import socket
@@ -7,7 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 
-from emailauto.core.exceptions import TemplateRenderError
+from emailauto.core.exceptions import InvalidStateTransition, StaleClaimToken, TemplateRenderError
 from emailauto.core.results import SendResult
 from emailauto.core.states import CampaignStatus, OutboxStatus
 from emailauto.email_providers.base import get_backend
@@ -18,7 +20,30 @@ from emailauto.outbox.transitions import transition_outbox
 from emailauto.recipients.suppression import check_suppression
 from emailauto.templates.renderer import TemplateSnapshot, render_template
 from emailauto.workers.retry_policy import next_retry_at
-from emailauto.workers.throttling import allow_send
+from emailauto.workers.throttling import check_send, record_send
+
+_CANCELLABLE_OUTBOX = {
+    OutboxStatus.PENDING,
+    OutboxStatus.ENQUEUED,
+    OutboxStatus.RETRY_SCHEDULED,
+    OutboxStatus.REQUEUED,
+}
+
+_INFLIGHT_OUTBOX = {
+    OutboxStatus.CLAIMED,
+    OutboxStatus.SENDING,
+}
+
+
+def _revoke_celery_task(task_id: str) -> None:
+    if not task_id:
+        return
+    try:
+        from celery import current_app
+
+        current_app.control.revoke(task_id, terminate=False)
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -33,30 +58,100 @@ def _increment_attempt_count(outbox_id: int) -> EmailOutbox:
     return EmailOutbox.objects.select_related("campaign", "campaign_run", "recipient", "template").get(pk=outbox_id)
 
 
+def _mark_sent_after_delivery(outbox_id: int, token: str) -> EmailOutbox:
+    """Mark a row sent after the provider accepted delivery.
+
+    If recovery released the claim while the worker was sending, reconcile with force=True
+    so a successful delivery is never left in a retryable state (duplicate-send guard).
+    """
+    return _transition_after_send_attempt(
+        outbox_id,
+        token,
+        OutboxStatus.SENT,
+        metadata={"recovery": "post_send_reconcile"},
+    )
+
+
+def _transition_after_send_attempt(
+    outbox_id: int,
+    token: str,
+    target_status: str,
+    *,
+    last_error: str = "",
+    next_attempt_at=None,
+    metadata: dict | None = None,
+) -> EmailOutbox:
+    """Apply a post-provider transition, reconciling when the claim was released mid-flight."""
+    current = EmailOutbox.objects.filter(pk=outbox_id).only("status", "claim_token").first()
+    if current and current.status == OutboxStatus.SENDING and current.claim_token == token:
+        return transition_outbox(
+            outbox_id,
+            target_status,
+            claim_token=token,
+            last_error=last_error,
+            next_attempt_at=next_attempt_at,
+            metadata=metadata,
+        )
+    reconcile_meta = {"recovery": "post_attempt_reconcile", **(metadata or {})}
+    return transition_outbox(
+        outbox_id,
+        target_status,
+        force=True,
+        last_error=last_error,
+        next_attempt_at=next_attempt_at,
+        metadata=reconcile_meta,
+    )
+
+
 def _finish_result(outbox: EmailOutbox, token: str, result: SendResult) -> SendOutcome:
     outbox = _increment_attempt_count(outbox.id)
     error = result.error_message or result.error_code
     if result.result == "success":
-        updated = transition_outbox(outbox.id, OutboxStatus.SENT, claim_token=token)
+        record_send(campaign_id=outbox.campaign_id)
+        try:
+            updated = _mark_sent_after_delivery(outbox.id, token)
+        except (StaleClaimToken, InvalidStateTransition):
+            updated = transition_outbox(
+                outbox.id,
+                OutboxStatus.SENT,
+                force=True,
+                metadata={"recovery": "post_send_reconcile"},
+            )
         return SendOutcome(updated.status, updated.id)
     if result.result == "permanent_failure":
-        updated = transition_outbox(outbox.id, OutboxStatus.FAILED, claim_token=token, last_error=error)
+        try:
+            updated = _transition_after_send_attempt(outbox.id, token, OutboxStatus.FAILED, last_error=error)
+        except (StaleClaimToken, InvalidStateTransition):
+            updated = transition_outbox(outbox.id, OutboxStatus.FAILED, force=True, last_error=error, metadata={"recovery": "post_attempt_reconcile"})
         return SendOutcome(updated.status, updated.id, error)
     if outbox.attempt_count >= outbox.max_attempts:
-        updated = transition_outbox(outbox.id, OutboxStatus.DEAD_LETTERED, claim_token=token, last_error=error)
+        try:
+            updated = _transition_after_send_attempt(outbox.id, token, OutboxStatus.DEAD_LETTERED, last_error=error)
+        except (StaleClaimToken, InvalidStateTransition):
+            updated = transition_outbox(outbox.id, OutboxStatus.DEAD_LETTERED, force=True, last_error=error, metadata={"recovery": "post_attempt_reconcile"})
         return SendOutcome(updated.status, updated.id, error)
-    updated = transition_outbox(
-        outbox.id,
-        OutboxStatus.RETRY_SCHEDULED,
-        claim_token=token,
-        last_error=error,
-        next_attempt_at=next_retry_at(outbox.attempt_count),
-    )
+    try:
+        updated = _transition_after_send_attempt(
+            outbox.id,
+            token,
+            OutboxStatus.RETRY_SCHEDULED,
+            last_error=error,
+            next_attempt_at=next_retry_at(outbox.attempt_count),
+        )
+    except (StaleClaimToken, InvalidStateTransition):
+        updated = transition_outbox(
+            outbox.id,
+            OutboxStatus.RETRY_SCHEDULED,
+            force=True,
+            last_error=error,
+            next_attempt_at=next_retry_at(outbox.attempt_count),
+            metadata={"recovery": "post_attempt_reconcile"},
+        )
     return SendOutcome(updated.status, updated.id, error)
 
 
 def _reschedule_without_attempt(outbox: EmailOutbox, token: str, reason: str) -> SendOutcome:
-    """Release a claimed/sending row back to retry_scheduled without burning an attempt.
+    """Release a claimed row back to retry_scheduled without burning an attempt.
 
     Used for throttling and paused-campaign holds: the provider was never contacted,
     so the delay must not count toward max_attempts (otherwise a throttled job could be
@@ -67,10 +162,19 @@ def _reschedule_without_attempt(outbox: EmailOutbox, token: str, reason: str) ->
         outbox.id,
         OutboxStatus.RETRY_SCHEDULED,
         claim_token=token,
+        force=True,
         last_error=reason,
         next_attempt_at=next_retry_at(delay_seconds_basis),
     )
     return SendOutcome(updated.status, updated.id, reason)
+
+
+def _abort_if_campaign_cancelled(outbox: EmailOutbox, token: str) -> SendOutcome | None:
+    outbox.campaign.refresh_from_db()
+    if outbox.campaign.status != CampaignStatus.CANCELLED:
+        return None
+    updated = transition_outbox(outbox.id, OutboxStatus.CANCELLED, claim_token=token, last_error="campaign is cancelled")
+    return SendOutcome(updated.status, updated.id, "campaign is cancelled")
 
 
 def send_outbox_email(outbox_id: int, *, worker_id: str | None = None, celery_task_id: str = "", backend_name: str | None = None) -> SendOutcome:
@@ -103,6 +207,10 @@ def send_outbox_email(outbox_id: int, *, worker_id: str | None = None, celery_ta
         )
         return SendOutcome(updated.status, updated.id, suppression.reason)
 
+    throttle = check_send(campaign_id=outbox.campaign_id)
+    if not throttle.allowed:
+        return _reschedule_without_attempt(outbox, token, throttle.reason)
+
     # Commit to sending only once the row is known to be sendable.
     outbox = transition_outbox(outbox.id, OutboxStatus.SENDING, claim_token=token)
     backend = get_backend(backend_name)
@@ -123,11 +231,9 @@ def send_outbox_email(outbox_id: int, *, worker_id: str | None = None, celery_ta
         complete_attempt(attempt, result)
         return _finish_result(outbox, token, result)
 
-    throttle = allow_send(campaign_id=outbox.campaign_id)
-    if not throttle.allowed:
-        # A throttle rejection is a delay, not a delivery attempt: reschedule without
-        # incrementing attempt_count. The retry_scheduled event records the decision.
-        return _reschedule_without_attempt(outbox, token, throttle.reason)
+    aborted = _abort_if_campaign_cancelled(outbox, token)
+    if aborted is not None:
+        return aborted
 
     attempt = start_attempt(outbox=outbox, worker_id=worker, celery_task_id=celery_task_id, provider_name=backend.provider_name)
     try:
@@ -144,10 +250,15 @@ def requeue_outbox(outbox_id: int) -> EmailOutbox:
         outbox = EmailOutbox.objects.select_for_update().get(pk=outbox_id)
         if outbox.status not in {OutboxStatus.DEAD_LETTERED, OutboxStatus.FAILED}:
             raise ValueError("Only failed or dead-lettered outbox rows can be requeued.")
+        prior_attempt_count = outbox.attempt_count
         outbox.attempt_count = 0
         outbox.max_attempts = settings.EMAILAUTO_MAX_SEND_ATTEMPTS
         outbox.save(update_fields=["attempt_count", "max_attempts", "updated_at"])
-        return transition_outbox(outbox.id, OutboxStatus.REQUEUED)
+        return transition_outbox(
+            outbox.id,
+            OutboxStatus.REQUEUED,
+            metadata={"attempt_count_reset": True, "prior_attempt_count": prior_attempt_count},
+        )
 
 
 def requeue_dead_letter(outbox_id: int) -> EmailOutbox:
@@ -202,41 +313,104 @@ def retry_outbox(outbox_id: int, *, enqueue_celery: bool | None = None) -> Email
 
 def release_stale_outbox(outbox_id: int, *, reason: str) -> EmailOutbox | None:
     """Release a row stuck in claimed/sending back to retry_scheduled (system recovery)."""
-    outbox = EmailOutbox.objects.filter(pk=outbox_id).only("id", "status", "attempt_count").first()
-    if outbox is None or outbox.status not in {OutboxStatus.CLAIMED, OutboxStatus.SENDING}:
-        return None
-    delay_basis = outbox.attempt_count or 1
-    return transition_outbox(
-        outbox_id,
-        OutboxStatus.RETRY_SCHEDULED,
-        force=True,
-        last_error=reason,
-        next_attempt_at=next_retry_at(delay_basis),
-        metadata={"recovery": "stale_claim"},
-    )
-
-
-def force_requeue_outbox(outbox_id: int, *, reason: str = "operator force requeue") -> EmailOutbox:
-    """Operator recovery for rows stuck in claimed/sending after a worker crash."""
+    task_id = ""
     with transaction.atomic():
-        outbox = EmailOutbox.objects.select_for_update().get(pk=outbox_id)
-        if outbox.status not in {OutboxStatus.CLAIMED, OutboxStatus.SENDING}:
-            raise ValueError("Only claimed or sending rows can be force-requeued.")
-    released = release_stale_outbox(outbox_id, reason=reason)
-    if released is None:
-        raise ValueError(f"Could not force-requeue outbox {outbox_id}.")
-    return released
-
-
-def cancel_outbox(outbox_id: int) -> EmailOutbox:
-    """Cancel a row that has not yet entered the send path."""
-    with transaction.atomic():
-        outbox = EmailOutbox.objects.select_for_update().get(pk=outbox_id)
-        if outbox.status not in {
-            OutboxStatus.PENDING,
-            OutboxStatus.ENQUEUED,
+        outbox = EmailOutbox.objects.select_for_update().filter(pk=outbox_id).first()
+        if outbox is None or outbox.status not in _INFLIGHT_OUTBOX:
+            return None
+        task_id = outbox.celery_task_id or ""
+        delay_basis = outbox.attempt_count or 1
+        row = transition_outbox(
+            outbox_id,
             OutboxStatus.RETRY_SCHEDULED,
-            OutboxStatus.REQUEUED,
-        }:
+            force=True,
+            last_error=reason,
+            next_attempt_at=next_retry_at(delay_basis),
+            metadata={"recovery": "stale_claim"},
+        )
+    if task_id:
+        _revoke_celery_task(task_id)
+    return row
+
+
+def force_requeue_outbox(outbox_id: int, *, reason: str = "operator force requeue", enqueue_celery: bool = True) -> EmailOutbox:
+    """Operator recovery for rows stuck in claimed/sending after a worker crash."""
+    task_id = ""
+    with transaction.atomic():
+        outbox = EmailOutbox.objects.select_for_update().get(pk=outbox_id)
+        if outbox.status not in _INFLIGHT_OUTBOX:
+            raise ValueError("Only claimed or sending rows can be force-requeued.")
+        task_id = outbox.celery_task_id or ""
+        delay_basis = outbox.attempt_count or 1
+        row = transition_outbox(
+            outbox_id,
+            OutboxStatus.RETRY_SCHEDULED,
+            force=True,
+            last_error=reason,
+            next_attempt_at=next_retry_at(delay_basis),
+            metadata={"recovery": "force_requeue"},
+        )
+    if task_id:
+        _revoke_celery_task(task_id)
+    if enqueue_celery:
+        from emailauto.scheduling.dispatcher import enqueue_outbox_by_id
+
+        enqueue_outbox_by_id(outbox_id, enqueue_celery=True)
+    return row
+
+
+def cancel_outbox(outbox_id: int, *, last_error: str = "cancelled by operator") -> EmailOutbox:
+    """Cancel a row that has not yet entered the send path."""
+    task_id = ""
+    with transaction.atomic():
+        outbox = EmailOutbox.objects.select_for_update().get(pk=outbox_id)
+        if outbox.status not in _CANCELLABLE_OUTBOX:
             raise ValueError("Only pending, enqueued, retry-scheduled, or requeued rows can be cancelled.")
-        return transition_outbox(outbox.id, OutboxStatus.CANCELLED, last_error="cancelled by operator")
+        if outbox.status == OutboxStatus.ENQUEUED:
+            task_id = outbox.celery_task_id
+        updated = transition_outbox(outbox.id, OutboxStatus.CANCELLED, last_error=last_error)
+    if task_id:
+        _revoke_celery_task(task_id)
+    return updated
+
+
+def _cancel_inflight_outbox(outbox_id: int, *, last_error: str) -> EmailOutbox:
+    with transaction.atomic():
+        outbox = EmailOutbox.objects.select_for_update().get(pk=outbox_id)
+        if outbox.status not in _INFLIGHT_OUTBOX:
+            raise ValueError(f"Outbox {outbox_id} is not in-flight.")
+        task_id = outbox.celery_task_id or ""
+        updated = transition_outbox(
+            outbox.id,
+            OutboxStatus.CANCELLED,
+            force=True,
+            last_error=last_error,
+            metadata={"recovery": "campaign_cancel"},
+        )
+    if task_id:
+        _revoke_celery_task(task_id)
+    return updated
+
+
+def bulk_cancel_open_outbox(campaign_id: int, *, reason: str = "campaign is cancelled") -> int:
+    """Cancel all pipeline and in-flight outbox rows for a campaign."""
+    pipeline_ids = list(
+        EmailOutbox.objects.filter(campaign_id=campaign_id, status__in=_CANCELLABLE_OUTBOX).values_list("id", flat=True)
+    )
+    inflight_ids = list(
+        EmailOutbox.objects.filter(campaign_id=campaign_id, status__in=_INFLIGHT_OUTBOX).values_list("id", flat=True)
+    )
+    cancelled = 0
+    for outbox_id in pipeline_ids:
+        try:
+            cancel_outbox(outbox_id, last_error=reason)
+        except (EmailOutbox.DoesNotExist, ValueError):
+            continue
+        cancelled += 1
+    for outbox_id in inflight_ids:
+        try:
+            _cancel_inflight_outbox(outbox_id, last_error=reason)
+        except (EmailOutbox.DoesNotExist, ValueError):
+            continue
+        cancelled += 1
+    return cancelled

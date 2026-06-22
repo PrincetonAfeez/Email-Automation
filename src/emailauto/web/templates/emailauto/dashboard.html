@@ -8,8 +8,8 @@
     {% include "emailauto/partials/system_status.html" %}
   </section>
   <section class="split">
-    <div class="panel" hx-get="{% url 'emailauto:outbox_table_partial' %}" hx-trigger="every 8s" hx-swap="innerHTML">
-      {% include "emailauto/partials/outbox_table.html" with outbox_rows=recent_outbox %}
+    <div class="panel" hx-get="{% url 'emailauto:outbox_table_partial' %}?outbox_page={{ outbox_page.number }}" hx-trigger="every 8s" hx-swap="innerHTML">
+      {% include "emailauto/partials/outbox_table_panel.html" with outbox_rows=recent_outbox outbox_page=outbox_page %}
     </div>
     <div class="panel">
       <h2>Campaigns</h2>
@@ -52,6 +52,7 @@
           {% endfor %}
         </tbody>
       </table>
+      {% include "emailauto/partials/pagination.html" with page=campaign_page page_param="campaign_page" %}
       <h2>Recent Failures</h2>
       <table>
         <thead><tr><th>ID</th><th>Recipient</th><th>Status</th></tr></thead>
@@ -67,13 +68,25 @@
           {% endfor %}
         </tbody>
       </table>
-      <h2>Suppress an address</h2>
+      <h2>Suppress / unsuppress an address</h2>
       {% if can_operate %}
       <form method="post" action="{% url 'emailauto:add_suppression' %}">
         {% csrf_token %}
         <input type="email" name="email" placeholder="user@example.com" required>
         <input type="text" name="reason" placeholder="reason">
         <button type="submit">Suppress</button>
+      </form>
+      <form method="post" action="{% url 'emailauto:remove_suppression' %}" style="margin-top:10px">
+        {% csrf_token %}
+        <input type="email" name="email" placeholder="user@example.com" required>
+        <button type="submit">Remove suppression</button>
+      </form>
+      <h2 style="margin-top:18px">Subscribe / unsubscribe</h2>
+      <form method="post" action="{% url 'emailauto:set_subscription' %}">
+        {% csrf_token %}
+        <input type="email" name="email" placeholder="user@example.com" required>
+        <button type="submit" name="action" value="unsubscribe">Unsubscribe</button>
+        <button type="submit" name="action" value="subscribe">Resubscribe</button>
       </form>
       {% else %}
       <p>Operator permission required to add suppressions.</p>

@@ -1,0 +1,11 @@
+{% if page.has_other_pages %}
+  <nav style="margin-top:12px;font-size:14px">
+    {% if page.has_previous %}
+      <a href="?{{ page_param }}={{ page.previous_page_number }}">Previous</a>
+    {% endif %}
+    <span> Page {{ page.number }} of {{ page.paginator.num_pages }} </span>
+    {% if page.has_next %}
+      <a href="?{{ page_param }}={{ page.next_page_number }}">Next</a>
+    {% endif %}
+  </nav>
+{% endif %}

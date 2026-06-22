@@ -8,6 +8,11 @@
     {% include "emailauto/partials/campaign_stats.html" %}
   </section>
   <section class="panel">
+    {% if empty_recipient_list %}
+      <p><em>Warning: this campaign's recipient list is empty — dispatch and trigger will create no outbox rows.</em></p>
+    {% else %}
+      <p><em>{{ recipient_count }} recipient(s) on list <strong>{{ campaign.recipient_list.name }}</strong>.</em></p>
+    {% endif %}
     <h2>Campaign actions</h2>
     {% if can_operate %}
       {% if actions.can_trigger %}
@@ -42,9 +47,11 @@
         {% endfor %}
       </tbody>
     </table>
+    {% include "emailauto/partials/pagination.html" with page=runs_page page_param="runs_page" %}
   </section>
   <section class="panel">
-    {% include "emailauto/partials/outbox_table.html" %}
+    {% include "emailauto/partials/outbox_table.html" with outbox_rows=outbox_rows %}
+    {% include "emailauto/partials/pagination.html" with page=outbox_page page_param="outbox_page" %}
   </section>
 {% endblock %}
 

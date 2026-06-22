@@ -22,6 +22,7 @@
     </div>
   </section>
   <section class="panel">
-    {% include "emailauto/partials/outbox_table.html" %}
+    {% include "emailauto/partials/outbox_table.html" with outbox_rows=outbox_rows %}
+    {% include "emailauto/partials/pagination.html" with page=outbox_page page_param="outbox_page" %}
   </section>
 {% endblock %}

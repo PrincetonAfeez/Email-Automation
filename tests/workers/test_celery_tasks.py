@@ -1,3 +1,5 @@
+""" Test celery tasks for EmailAuto."""
+
 from __future__ import annotations
 
 from io import StringIO

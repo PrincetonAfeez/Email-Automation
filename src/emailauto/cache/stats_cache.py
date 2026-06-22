@@ -1,3 +1,5 @@
+""" Cache for dashboard stats """
+
 from __future__ import annotations
 
 from django.conf import settings

@@ -1,16 +1,17 @@
+""" Campaign services """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from django.db import transaction
 from django.db.models import Exists, OuterRef
-from django.utils import timezone
 
 from emailauto.campaigns.models import Campaign
 from emailauto.core.states import CampaignRunStatus, CampaignStatus, EventType, OutboxStatus, ScheduleType, assert_campaign_transition
 from emailauto.observability.events import record_event
 from emailauto.outbox.models import EmailOutbox
-from emailauto.scheduling.models import CampaignRun, CampaignSchedule
+from emailauto.scheduling.models import CampaignSchedule
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,63 @@ _CAMPAIGN_TERMINAL_OUTBOX = {
     OutboxStatus.SKIPPED_SUPPRESSED,
 }
 
+_OPEN_OUTBOX_STATUSES = {
+    OutboxStatus.PENDING,
+    OutboxStatus.ENQUEUED,
+    OutboxStatus.CLAIMED,
+    OutboxStatus.SENDING,
+    OutboxStatus.RETRY_SCHEDULED,
+    OutboxStatus.REQUEUED,
+}
+
+CREATABLE_CAMPAIGN_STATUSES = {CampaignStatus.DRAFT, CampaignStatus.SCHEDULED}
+
+_RECONCILABLE_CAMPAIGN_STATUSES = {
+    CampaignStatus.ACTIVE,
+    CampaignStatus.SCHEDULED,
+}
+
+
+def _assert_no_open_outbox(campaign_id: int) -> None:
+    if EmailOutbox.objects.filter(campaign_id=campaign_id, status__in=_OPEN_OUTBOX_STATUSES).exists():
+        raise ValueError("Cannot mark a campaign completed while outbox work is still in progress.")
+
+
+def promote_campaign_to_active(campaign_id: int) -> None:
+    """Move a scheduled campaign to active when dispatch begins sending work."""
+    with transaction.atomic():
+        campaign = Campaign.objects.select_for_update().filter(pk=campaign_id, status=CampaignStatus.SCHEDULED).first()
+        if campaign is None:
+            return
+        assert_campaign_transition(CampaignStatus.SCHEDULED, CampaignStatus.ACTIVE)
+        campaign.status = CampaignStatus.ACTIVE
+        campaign.save(update_fields=["status", "updated_at"])
+
+
+def mark_campaign_completed(campaign_id: int, *, reconciled: bool = False) -> Campaign:
+    """Transition a campaign to completed when all outbox work is terminal."""
+    with transaction.atomic():
+        campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
+        if campaign.status == CampaignStatus.COMPLETED:
+            return campaign
+        if campaign.status == CampaignStatus.PAUSED:
+            _assert_no_open_outbox(campaign_id)
+        elif campaign.status in {CampaignStatus.ACTIVE, CampaignStatus.SCHEDULED}:
+            assert_campaign_transition(campaign.status, CampaignStatus.COMPLETED)
+            _assert_no_open_outbox(campaign_id)
+        else:
+            raise ValueError(f"Cannot complete a campaign in status '{campaign.status}'.")
+        CampaignSchedule.objects.filter(campaign=campaign, enabled=True).update(enabled=False)
+        campaign.status = CampaignStatus.COMPLETED
+        campaign.status_before_pause = ""
+        campaign.save(update_fields=["status", "status_before_pause", "updated_at"])
+        record_event(
+            EventType.CAMPAIGN_COMPLETED,
+            campaign=campaign,
+            metadata={"reconciled": reconciled},
+        )
+    return campaign
+
 
 def set_campaign_status(campaign_id: int, status: str) -> Campaign:
     """Change a campaign's lifecycle status through the service layer."""
@@ -47,6 +105,8 @@ def set_campaign_status(campaign_id: int, status: str) -> Campaign:
         return pause_campaign(campaign_id)
     if status == CampaignStatus.CANCELLED:
         return cancel_campaign(campaign_id)
+    if status == CampaignStatus.COMPLETED:
+        return mark_campaign_completed(campaign_id)
     with transaction.atomic():
         campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
         if campaign.status == CampaignStatus.PAUSED and status in {CampaignStatus.ACTIVE, CampaignStatus.SCHEDULED}:
@@ -83,6 +143,9 @@ def resume_campaign(campaign_id: int) -> Campaign:
 
 
 def cancel_campaign(campaign_id: int) -> Campaign:
+    from emailauto.outbox.services import bulk_cancel_open_outbox
+    from emailauto.scheduling.run_transitions import bulk_cancel_runs
+
     with transaction.atomic():
         campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
         if campaign.status not in CampaignStatus.CANCELLABLE:
@@ -90,11 +153,9 @@ def cancel_campaign(campaign_id: int) -> Campaign:
         campaign.status = CampaignStatus.CANCELLED
         campaign.status_before_pause = ""
         campaign.save(update_fields=["status", "status_before_pause", "updated_at"])
-        CampaignSchedule.objects.filter(campaign=campaign, enabled=True).update(enabled=False, updated_at=timezone.now())
-        CampaignRun.objects.filter(campaign=campaign, status__in=_OPEN_RUN_STATUSES).update(
-            status=CampaignRunStatus.CANCELLED,
-            updated_at=timezone.now(),
-        )
+        CampaignSchedule.objects.filter(campaign=campaign, enabled=True).update(enabled=False)
+        bulk_cancel_runs(campaign.id, open_statuses=_OPEN_RUN_STATUSES)
+        bulk_cancel_open_outbox(campaign_id, reason="campaign is cancelled")
     return campaign
 
 
@@ -103,20 +164,24 @@ def reconcile_campaigns(*, limit: int = 100) -> int:
     enabled_schedules = CampaignSchedule.objects.filter(campaign_id=OuterRef("pk"), enabled=True)
     non_terminal_outbox = EmailOutbox.objects.filter(campaign_id=OuterRef("pk")).exclude(status__in=_CAMPAIGN_TERMINAL_OUTBOX)
     candidates = (
-        Campaign.objects.filter(status__in=[CampaignStatus.ACTIVE, CampaignStatus.SCHEDULED])
+        Campaign.objects.filter(status__in=_RECONCILABLE_CAMPAIGN_STATUSES)
         .annotate(has_enabled_schedule=Exists(enabled_schedules), has_open_outbox=Exists(non_terminal_outbox))
         .filter(has_enabled_schedule=False, has_open_outbox=False)
         .order_by("id")[:limit]
     )
     reconciled = 0
     for campaign in candidates:
-        if not EmailOutbox.objects.filter(campaign=campaign).exists():
+        try:
+            mark_campaign_completed(campaign.id, reconciled=True)
+        except ValueError:
             continue
-        campaign.status = CampaignStatus.COMPLETED
-        campaign.save(update_fields=["status", "updated_at"])
-        record_event(EventType.SCHEDULED, campaign=campaign, metadata={"reconciled": "completed"})
         reconciled += 1
     return reconciled
+
+
+def _assert_recipients_present(campaign: Campaign) -> None:
+    if not campaign.recipient_list.recipients.exists():
+        raise ValueError(f"Campaign '{campaign.name}' has an empty recipient list.")
 
 
 def trigger_campaign_now(campaign_id: int, *, enqueue_celery: bool = True) -> TriggerResult:
@@ -131,28 +196,23 @@ def trigger_campaign_now(campaign_id: int, *, enqueue_celery: bool = True) -> Tr
     campaign = Campaign.objects.get(pk=campaign_id)
     if campaign.status in {CampaignStatus.CANCELLED, CampaignStatus.COMPLETED}:
         raise ValueError(f"Cannot trigger a campaign in status '{campaign.status}'.")
-    if campaign.status not in CampaignStatus.TRIGGERABLE:
+    if campaign.status == CampaignStatus.DRAFT:
+        assert_campaign_transition(CampaignStatus.DRAFT, CampaignStatus.SCHEDULED)
         campaign.status = CampaignStatus.SCHEDULED
         campaign.save(update_fields=["status", "updated_at"])
+    elif campaign.status not in CampaignStatus.TRIGGERABLE:
+        raise ValueError(f"Cannot trigger a campaign in status '{campaign.status}'.")
+    _assert_recipients_present(campaign)
 
     now = clock.utcnow()
-    schedule = (
-        CampaignSchedule.objects.filter(campaign=campaign, schedule_type=ScheduleType.ONE_TIME, enabled=False)
-        .order_by("-id")
-        .first()
+    schedule = CampaignSchedule.objects.create(
+        campaign=campaign,
+        schedule_type=ScheduleType.ONE_TIME,
+        send_at=now,
+        enabled=True,
     )
-    if schedule:
-        schedule.enabled = True
-        schedule.send_at = now
-        schedule.next_run_at = now
-        schedule.save(update_fields=["enabled", "send_at", "next_run_at", "updated_at"])
-    else:
-        schedule = CampaignSchedule.objects.create(
-            campaign=campaign,
-            schedule_type=ScheduleType.ONE_TIME,
-            send_at=now,
-        )
     record_event(EventType.SCHEDULED, campaign=campaign, metadata={"trigger": "manual"})
+    promote_campaign_to_active(campaign.id)
     run, created_count, _run_created = create_run_and_outbox(schedule)
     if run is None:
         raise RuntimeError("Failed to generate a run for the triggered campaign.")

@@ -1,10 +1,12 @@
+""" Manage command to inspect and requeue dead-lettered outbox rows """
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from emailauto.core.states import OutboxStatus
 from emailauto.outbox.models import EmailOutbox
-from emailauto.outbox.services import requeue_dead_letter
+from emailauto.outbox.services import retry_outbox
 
 
 class Command(BaseCommand):
@@ -19,7 +21,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if options["action"] == "requeue":
             try:
-                row = requeue_dead_letter(options["outbox_id"])
+                row = retry_outbox(options["outbox_id"])
             except (EmailOutbox.DoesNotExist, ValueError) as exc:
                 raise CommandError(str(exc)) from exc
             self.stdout.write(self.style.SUCCESS(f"Requeued {row.id}: {row.status}"))

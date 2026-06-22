@@ -1,3 +1,5 @@
+""" Settings for EmailAuto."""
+
 from __future__ import annotations
 
 import os
@@ -51,7 +53,7 @@ INSTALLED_APPS = [
     "emailauto.campaigns.apps.CampaignsConfig",
     "emailauto.scheduling.apps.SchedulingConfig",
     "emailauto.outbox.apps.OutboxConfig",
-    "emailauto.workers",
+    "emailauto.workers.apps.WorkersConfig",
     "emailauto.cli.apps.CliConfig",
     "emailauto.web.apps.WebConfig",
 ]
@@ -140,6 +142,8 @@ else:
             "LOCATION": "emailauto-dev",
         }
     }
+    if not DEBUG:
+        raise ImproperlyConfigured("REDIS_CACHE_URL must be set when DJANGO_DEBUG is false.")
 
 EMAILAUTO_EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "console").strip().lower()
 EMAILAUTO_DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com")

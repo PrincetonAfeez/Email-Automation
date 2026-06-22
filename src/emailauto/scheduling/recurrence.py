@@ -1,3 +1,5 @@
+""" Recurrence for EmailAuto."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -79,14 +81,26 @@ def _weekday_matches(cron_weekday: int, expression: str) -> bool:
     return False
 
 
+def _field_is_wildcard(expression: str) -> bool:
+    return expression.strip() in ("*", "?")
+
+
 def _date_matches(moment: datetime, day: str, month: str, weekday: str) -> bool:
-    """Whether the date fields (day-of-month, month, day-of-week) could match this day."""
+    """Whether the date fields (day-of-month, month, day-of-week) could match this day.
+
+    Standard cron ORs day-of-month and day-of-week when both are restricted (neither is
+    ``*``/``?``). Month always constrains the match.
+    """
+    if not _field_matches(moment.month, month, names=MONTH_NAMES):
+        return False
     cron_weekday = (moment.weekday() + 1) % 7  # datetime Mon=0..Sun=6 -> cron Sun=0..Sat=6
-    return (
-        _field_matches(moment.day, day)
-        and _field_matches(moment.month, month, names=MONTH_NAMES)
-        and _weekday_matches(cron_weekday, weekday)
-    )
+    dom_wild = _field_is_wildcard(day)
+    dow_wild = _field_is_wildcard(weekday)
+    dom_matches = dom_wild or _field_matches(moment.day, day)
+    dow_matches = dow_wild or _weekday_matches(cron_weekday, weekday)
+    if not dom_wild and not dow_wild:
+        return dom_matches or dow_matches
+    return dom_matches and dow_matches
 
 
 def cron_matches(moment: datetime, expression: str) -> bool:

@@ -1,3 +1,5 @@
+""" Manage command to dispatch due schedules and enqueue due outbox rows """
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandParser

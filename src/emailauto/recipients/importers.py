@@ -1,3 +1,5 @@
+""" Importers for EmailAuto."""
+
 from __future__ import annotations
 
 import csv

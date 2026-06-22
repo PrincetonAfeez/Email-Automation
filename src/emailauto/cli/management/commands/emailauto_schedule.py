@@ -1,3 +1,5 @@
+""" Create and list campaign schedules. Maps to the scope's `emailauto schedule`."""
+
 from __future__ import annotations
 
 from datetime import UTC

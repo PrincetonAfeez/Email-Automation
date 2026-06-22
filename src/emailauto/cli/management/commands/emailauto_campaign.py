@@ -1,9 +1,11 @@
+""" Create, list, inspect, and control campaigns """
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from emailauto.campaigns.models import Campaign
-from emailauto.campaigns.services import cancel_campaign, pause_campaign, resume_campaign, set_campaign_status
+from emailauto.campaigns.services import CREATABLE_CAMPAIGN_STATUSES, cancel_campaign, pause_campaign, resume_campaign, set_campaign_status
 from emailauto.core.states import CampaignStatus
 from emailauto.observability.stats import outbox_counts
 from emailauto.recipients.models import RecipientList
@@ -20,7 +22,7 @@ class Command(BaseCommand):
         create.add_argument("--name", required=True)
         create.add_argument("--template", required=True)
         create.add_argument("--list", dest="list_name", required=True)
-        create.add_argument("--status", choices=[choice[0] for choice in CampaignStatus.CHOICES], default=CampaignStatus.SCHEDULED)
+        create.add_argument("--status", choices=sorted(CREATABLE_CAMPAIGN_STATUSES), default=CampaignStatus.SCHEDULED)
         status = sub.add_parser("status")
         status.add_argument("campaign_id", type=int)
         status.add_argument("status", choices=[choice[0] for choice in CampaignStatus.CHOICES])
@@ -50,11 +52,17 @@ class Command(BaseCommand):
                 recipient_list = RecipientList.objects.get(name=options["list_name"])
             except RecipientList.DoesNotExist as exc:
                 raise CommandError(f"No recipient list named '{options['list_name']}'.") from exc
-            campaign, _ = Campaign.objects.update_or_create(
+            if Campaign.objects.filter(name=options["name"]).exists():
+                raise CommandError(f"Campaign '{options['name']}' already exists.")
+            campaign = Campaign.objects.create(
                 name=options["name"],
-                defaults={"template": template, "recipient_list": recipient_list, "status": options["status"]},
+                template=template,
+                recipient_list=recipient_list,
+                status=options["status"],
             )
             self.stdout.write(self.style.SUCCESS(f"Campaign {campaign.id}: {campaign.name}"))
+            if not recipient_list.recipients.exists():
+                self.stdout.write(self.style.WARNING("Warning: recipient list is empty — dispatch will create no outbox rows."))
             return
         if action == "status":
             try:

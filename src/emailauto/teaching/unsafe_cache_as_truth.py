@@ -1,5 +1,6 @@
-from __future__ import annotations
+""" Unsafe cache as truth for EmailAuto."""
 
+from __future__ import annotations
 
 def run_demo() -> dict[str, str]:
     cached_state = "pending"

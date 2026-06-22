@@ -1,4 +1,4 @@
-"""Tiny in-DB fixtures for the teaching demos.
+"""Tiny in-DB fixtures for the teaching demos
 
 Every demo runs inside an ``atomic()`` block that is rolled back at the end, so these
 helpers can create freely-named rows without polluting the database or colliding across

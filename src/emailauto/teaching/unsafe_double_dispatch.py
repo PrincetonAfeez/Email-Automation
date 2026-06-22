@@ -1,4 +1,4 @@
-"""UNSAFE: sending a row without the database claim step.
+"""UNSAFE: sending a row without the database claim step 
 
 Teaching point: the production worker claims an outbox row with an atomic
 compare-and-swap before sending, so two tasks racing for one row produce exactly one

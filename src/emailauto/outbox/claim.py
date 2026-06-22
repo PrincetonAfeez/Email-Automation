@@ -1,3 +1,5 @@
+""" Claim for EmailAuto."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

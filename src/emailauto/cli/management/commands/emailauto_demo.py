@@ -1,3 +1,5 @@
+""" Manage command to run safe pipeline demos and unsafe teaching demos """
+
 from __future__ import annotations
 
 from importlib import import_module

@@ -1,3 +1,5 @@
+""" Test email backends for EmailAuto."""
+
 from __future__ import annotations
 
 import smtplib
@@ -45,3 +47,14 @@ def test_smtp_timeout_is_transient(mock_smtp, settings):
     result = SMTPEmailBackend().send_email(_message())
 
     assert result.result == "transient_failure"
+
+
+def test_console_backend_prints_and_succeeds(capsys):
+    from emailauto.email_providers.console import ConsoleEmailBackend
+
+    result = ConsoleEmailBackend().send_email(_message())
+
+    captured = capsys.readouterr()
+    assert result.result == "success"
+    assert "user@example.com" in captured.out
+    assert "Idempotency-Key: key-1" in captured.out

@@ -1,3 +1,5 @@
+""" Test outbox flow for EmailAuto."""
+
 from __future__ import annotations
 
 import pytest
